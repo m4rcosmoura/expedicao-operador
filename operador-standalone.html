@@ -1,0 +1,3007 @@
+<!DOCTYPE html>
+<!--
+  operador-standalone.html — Admin (Painel/Distribuição/Resumo/Desempenho)
+  + Operador em UM ARQUIVO SÓ, sem depender da extensão nem de hospedagem.
+  Mande este arquivo pro celular de quem for usar (WhatsApp, e-mail, etc.)
+  e ele abre direto pelo navegador do celular (file://).
+
+  Tela de login única, sem escolher tipo de usuário — o sistema decide
+  sozinho: se "usuário"/"senha" bater com a credencial do administrador
+  (definida abaixo), entra vendo o app inteiro do admin, com abas fixas
+  embaixo da tela (Painel/Distribuição/Resumo/Desempenho — as mesmas 4
+  telas que existem na extensão do desktop, só que otimizadas pro tamanho
+  do celular); senão, se bater com o nome + PIN de um operador cadastrado
+  na Distribuição, entra vendo só as próprias cargas. Extensão (PC) e este
+  arquivo (celular) gravam no mesmo banco Firestore, então qualquer
+  atualização feita num lado aparece no outro.
+
+  Cada aba do admin só busca dados do banco enquanto está sendo exibida
+  (troca de aba dispara a busca da nova e pausa a da anterior) — economiza
+  dado móvel/bateria em vez de manter as 4 rodando ao mesmo tempo sempre.
+
+  Usuário/senha do administrador: procure por "ADMIN_USUARIO"/"ADMIN_SENHA"
+  mais abaixo, no script — troque os valores se quiser outra credencial.
+
+  ANTES DE ENVIAR: cole o firebaseConfig do seu projeto no objeto
+  EXP_FIREBASE_CONFIG logo abaixo (Firebase Console > Configurações do
+  projeto > Seus apps > app Web). Sem isso preenchido, a tela funciona só em
+  modo demo local (dados não saem do próprio aparelho).
+
+  Este arquivo é gerado a partir de logic.js + firestore-client.js +
+  dashboard.js + distribuicao.js + resumo.js + desempenho.js + app.js +
+  operador.js + styles.css (dashboard/distribuicao/resumo/desempenho). Se
+  qualquer um desses mudar na extensão, regenere este arquivo (peça pro
+  Claude Code refazer o empacotamento).
+
+  Índice das seções de <script> (na ordem em que aparecem no arquivo):
+  1. EXP_FIREBASE_CONFIG — credenciais do Firebase.
+  2. logic.js — regras de negócio puras, compartilhadas por tudo.
+  3. firestore-client.js — cliente Firestore REST (sem SDK).
+  4. dashboard.js (adaptado) — aba "Painel", IDs com prefixo pnl.
+  5. distribuicao.js (adaptado) — aba "Distribuição", IDs originais (sem prefixo).
+  6. resumo.js (adaptado) — aba "Resumo", IDs com prefixo rsm.
+  7. desempenho.js (adaptado) — aba "Desempenho", IDs com prefixo dsp.
+  8. app.js (adaptado) — troca de abas do admin + badge de pendências.
+  9. operador.js (adaptado) — login único, sessão, tela do Operador.
+-->
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Expedição — Distribuição / Operador</title>
+<style>
+:root {
+  --bg: #eef0f3;
+  --surface: #ffffff;
+  --stripe: #f7f9fb;
+  --line: #e2e6ea;
+  --txt: #1f2430;
+  --txt-dim: #4b5568;
+  --txt-faint: #8891a0;
+  --navy: #14294d;
+  --navy-tint: #eef1f6;
+  --fs-title: 16px;
+  --fs-label: 11.5px;
+  --fs-body: 14px;
+  --fs-small: 12px;
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; height: 100%; }
+body {
+  background: var(--bg);
+  color: var(--txt);
+  font: var(--fs-body)/1.4 -apple-system, "Segoe UI", Roboto, Arial, sans-serif;
+  display: flex;
+  flex-direction: column;
+  min-height: 100vh;
+}
+
+/* ---- topo + abas ---- */
+.topbar {
+  padding: 18px 20px 12px; display: flex; align-items: center; justify-content: space-between;
+}
+.topbar[hidden] { display: none; }
+.topbar h1 { font-size: var(--fs-title); font-weight: 700; margin: 0; color: var(--txt); }
+
+/* ---- tabelas/blocos genéricos (dashboard.css/resumo.css) ---- */
+.resumo-main { flex: 1; padding: 0 18px 24px; display: flex; flex-direction: column; gap: 22px; }
+.bloco { width: fit-content; max-width: 100%; margin: 0 auto; }
+.bloco h2 {
+  font-size: 13px; font-weight: 600; color: var(--txt-dim);
+  text-transform: uppercase; letter-spacing: .05em; margin: 0 0 8px; text-align: center;
+}
+.meta-info { text-align: center; color: var(--txt-faint); font-size: var(--fs-small); margin: 0 0 14px; }
+.tabela-wrap {
+  overflow: hidden; overflow-x: auto; background: var(--surface);
+  border-radius: 14px; box-shadow: 0 1px 3px rgba(20, 41, 77, .1), 0 1px 2px rgba(20, 41, 77, .06);
+  width: fit-content; max-width: 100%; margin: 0 auto;
+}
+.tabela-wrap table { width: auto; min-width: 320px; border-collapse: collapse; }
+thead th {
+  text-align: left; font-size: var(--fs-label); font-weight: 700; letter-spacing: .03em;
+  color: #ffffff; background: var(--navy); padding: 8px 14px; white-space: nowrap;
+}
+thead th.num, tbody td.num { text-align: right; }
+tbody td { padding: 5px 14px; border-bottom: 1px solid var(--line); vertical-align: middle; font-size: var(--fs-body); }
+tbody tr:last-child td { border-bottom: none; }
+tbody tr:nth-child(even) { background: var(--stripe); }
+.status-badge {
+  display: inline-block; font-weight: 700; font-size: var(--fs-small); padding: 3px 10px;
+  border-radius: 6px; color: #ffffff; white-space: nowrap;
+}
+.placa { font-weight: 700; letter-spacing: .02em; font-variant-numeric: tabular-nums; }
+.empresa-tag { font-size: var(--fs-body); color: var(--txt-dim); font-weight: 500; }
+.empresa-basf { color: #8a6d00; }
+.empresa-multiplicacao { color: #00695c; }
+.vazio { padding: 40px 0; text-align: center; color: var(--txt-faint); font-size: var(--fs-body); }
+.total-row td { font-weight: 700; border-top: 2px solid var(--line); }
+
+/* ---- distribuicao.css ---- */
+.operadores-card {
+  width: fit-content; max-width: 100%; margin: 0 auto;
+  background: var(--surface); border-radius: 14px;
+  box-shadow: 0 1px 3px rgba(20, 41, 77, .1), 0 1px 2px rgba(20, 41, 77, .06);
+  padding: 16px 18px;
+}
+.chips-operadores { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 12px; }
+.chips-operadores:empty { display: none; }
+.chip-operador {
+  display: inline-flex; align-items: center; gap: 8px;
+  background: var(--navy-tint); color: var(--txt); font-size: var(--fs-small); font-weight: 600;
+  padding: 6px 8px 6px 14px; border-radius: 999px;
+}
+.chip-operador button {
+  border: none; background: transparent; color: var(--txt-faint); cursor: pointer;
+  font-size: 14px; line-height: 1; padding: 2px 4px; font-weight: 700;
+}
+.chip-operador button:hover { color: #c62828; }
+
+.selo-turno {
+  border: none; border-radius: 999px; cursor: pointer; font-family: inherit;
+  font-size: 10px; font-weight: 800; letter-spacing: .03em; padding: 3px 8px;
+  background: var(--line); color: var(--txt-dim);
+}
+.selo-turno--1 { background: #eb6834; color: #ffffff; }
+.selo-turno--2 { background: #2a78d6; color: #ffffff; }
+.selo-turno:hover { filter: brightness(1.1); }
+
+.form-operador { display: flex; gap: 8px; flex-wrap: wrap; }
+.form-operador input, .form-operador select {
+  flex: 1; min-width: 200px; font-size: var(--fs-body); padding: 8px 12px;
+  border: 1px solid var(--line); border-radius: 8px; color: var(--txt); font-family: inherit;
+}
+.form-operador input:focus, .form-operador select:focus { outline: none; border-color: var(--navy); }
+.form-operador input.input-pin { flex: none; width: 130px; font-variant-numeric: tabular-nums; letter-spacing: .1em; }
+.form-operador select.input-turno { flex: none; width: 160px; background: var(--surface); }
+.form-operador button {
+  font-size: var(--fs-small); font-weight: 700; color: #ffffff; background: var(--navy);
+  border: none; border-radius: 8px; padding: 8px 16px; cursor: pointer; white-space: nowrap;
+}
+.form-operador button:hover { filter: brightness(1.15); }
+
+.sel-operador {
+  font-size: var(--fs-small); font-family: inherit; color: var(--txt);
+  border: 1px solid var(--line); border-radius: 6px; padding: 5px 8px; background: var(--surface);
+  max-width: 100%;
+}
+.sel-operador:focus { outline: none; border-color: var(--navy); }
+
+.btn-remover {
+  font-size: var(--fs-small); font-weight: 600; color: #a33; background: transparent;
+  border: 1px solid #e0b4b4; border-radius: 6px; padding: 4px 10px; cursor: pointer;
+}
+.btn-remover:hover { background: #fdecea; }
+
+.btn-editar {
+  font-size: var(--fs-small); font-weight: 600; color: var(--navy); background: transparent;
+  border: 1px solid var(--line); border-radius: 6px; padding: 4px 10px; cursor: pointer;
+}
+.btn-editar:hover { background: var(--navy-tint); }
+
+.aviso-inline { color: var(--txt-faint); font-size: var(--fs-small); font-style: italic; }
+
+.resumo-turnos { display: flex; flex-wrap: wrap; gap: 24px; justify-content: center; }
+.resumo-turno-col { display: flex; flex-direction: column; align-items: center; }
+.resumo-turno-col h3 {
+  font-size: var(--fs-label); font-weight: 700; color: var(--txt-dim);
+  text-transform: uppercase; letter-spacing: .05em; margin: 0 0 8px;
+}
+.resumo-turno-col .tabela-wrap table { min-width: 260px; }
+
+.busca-wrap { width: fit-content; max-width: 100%; margin: 0 auto 22px; }
+.input-busca {
+  width: 420px; max-width: 100%; font-size: var(--fs-body); font-family: inherit;
+  padding: 10px 14px; border: 1px solid var(--line); border-radius: 10px; color: var(--txt);
+  background: var(--surface);
+}
+.input-busca:focus { outline: none; border-color: var(--navy); }
+.input-busca::placeholder { color: var(--txt-faint); }
+
+/* ---- operador.css ---- */
+.operador-body { background: var(--bg); }
+
+.tela-login { min-height: 100vh; display: flex; align-items: center; justify-content: center; padding: 24px; }
+.tela-login[hidden], .tela-operador[hidden] { display: none; }
+.login-card {
+  width: 100%; max-width: 340px; background: var(--surface);
+  border-radius: 16px; padding: 28px 24px;
+  box-shadow: 0 1px 3px rgba(20, 41, 77, .1), 0 1px 2px rgba(20, 41, 77, .06);
+}
+.login-card h1 {
+  font-size: 20px; font-weight: 700; margin: 0 0 4px; color: var(--txt); text-align: center;
+}
+.login-sub {
+  margin: 0 0 22px; color: var(--txt-faint); font-size: var(--fs-body); text-align: center;
+}
+.campo-label {
+  display: block; font-size: var(--fs-label); font-weight: 700; letter-spacing: .04em;
+  text-transform: uppercase; color: var(--txt-faint); margin: 14px 0 6px;
+}
+.campo-grande {
+  width: 100%; font-size: 17px; padding: 13px 14px; border-radius: 10px;
+  border: 1px solid var(--line); color: var(--txt); font-family: inherit; background: var(--surface);
+}
+.campo-grande:focus { outline: none; border-color: var(--navy); }
+.campo-pin { text-align: center; letter-spacing: .5em; font-weight: 700; }
+
+.erro-login {
+  margin-top: 12px; padding: 9px 12px; border-radius: 8px;
+  background: #fdecea; color: #a33; font-size: var(--fs-small); text-align: center;
+}
+
+.btn-entrar {
+  width: 100%; margin-top: 22px; font-size: 17px; font-weight: 700; color: #ffffff;
+  background: var(--navy); border: none; border-radius: 10px; padding: 14px; cursor: pointer;
+}
+.btn-entrar:active { filter: brightness(1.15); }
+
+.tela-operador { padding: 4px 16px 32px; }
+.op-topbar { display: flex; align-items: center; justify-content: space-between; margin-bottom: 18px; }
+.op-ola { font-size: var(--fs-small); color: var(--txt-faint); }
+.op-nome { font-size: 19px; font-weight: 700; color: var(--txt); }
+.btn-sair {
+  font-size: var(--fs-small); font-weight: 600; color: var(--txt-dim);
+  background: var(--navy-tint); border: none; border-radius: 8px; padding: 8px 14px; cursor: pointer;
+}
+
+.lista-cargas { display: flex; flex-direction: column; gap: 12px; }
+.card-carga {
+  background: var(--surface); border-radius: 14px; padding: 16px;
+  box-shadow: 0 1px 3px rgba(20, 41, 77, .1), 0 1px 2px rgba(20, 41, 77, .06);
+}
+.card-topo { display: flex; align-items: center; justify-content: space-between; margin-bottom: 10px; }
+.card-carga-web { font-size: 15px; font-weight: 700; color: var(--txt); }
+.card-linha {
+  display: flex; justify-content: space-between; align-items: baseline;
+  font-size: var(--fs-body); color: var(--txt-dim); padding: 3px 0;
+}
+.card-linha .rotulo { color: var(--txt-faint); font-size: var(--fs-small); }
+.card-linha .valor { font-weight: 600; color: var(--txt); text-align: right; }
+
+.card-acao {
+  width: 100%; margin-top: 14px; font-size: 16px; font-weight: 700; color: #ffffff;
+  border: none; border-radius: 10px; padding: 13px; cursor: pointer;
+}
+.card-acao.iniciar { background: var(--navy); }
+.card-acao.finalizar { background: #2e7d32; }
+.card-acao:active { filter: brightness(1.15); }
+
+.card-desde { font-size: var(--fs-small); color: var(--txt-faint); margin-top: 8px; text-align: center; }
+
+.vazio-cargas {
+  text-align: center; color: var(--txt-faint); font-size: var(--fs-body); padding: 60px 20px;
+}
+
+.status-banner {
+  margin: 0 20px 14px; padding: 8px 12px; border-radius: 8px; font-size: var(--fs-small);
+  text-align: center; background: var(--navy-tint); color: var(--txt-dim);
+}
+.status-banner.offline { background: #fdecea; color: #a33; }
+
+/* ---- header de quem já logou (operador ou admin) ---- */
+.topo-sessao { display: flex; align-items: center; gap: 12px; }
+.topo-sessao #sessaoLabel { font-size: var(--fs-small); color: var(--txt-dim); font-weight: 600; }
+
+/* ---- dashboard.css (Painel) ---- */
+.alerta {
+  margin: 0 0 14px; padding: 10px 14px; border-radius: 8px;
+  background: #fdecea; color: #a33; border-left: 3px solid #c62828;
+  font-size: var(--fs-body);
+}
+.filtros { display: flex; flex-wrap: wrap; gap: 8px; margin: 0 0 14px; }
+.tab-pill {
+  position: relative; cursor: pointer; user-select: none; white-space: nowrap;
+  font-size: var(--fs-small); font-weight: 700; color: var(--txt-dim);
+  background: var(--navy-tint); padding: 9px 14px; border-radius: 10px;
+}
+.tab-pill.ativo { background: var(--navy); color: #ffffff; }
+.badge-count {
+  position: absolute; top: -8px; right: -8px;
+  min-width: 20px; height: 20px; padding: 0 5px; border-radius: 999px;
+  background: #e5342b; color: #ffffff; box-shadow: 0 0 0 2px var(--bg);
+  font-size: 10.5px; font-weight: 800; font-variant-numeric: tabular-nums;
+  display: inline-flex; align-items: center; justify-content: center;
+}
+td.num { font-variant-numeric: tabular-nums; white-space: nowrap; font-weight: 500; }
+td.nivel-amarelo { color: #9a6400; font-weight: 700; }
+td.nivel-vermelho { color: #c62828; font-weight: 700; }
+
+/* ---- resumo.css extra (Resumo) ---- */
+.status-dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 8px; }
+.tabela-wrap--diaria table { width: auto; min-width: 0; }
+.tabela-wrap--diaria th, .tabela-wrap--diaria td { text-align: center; white-space: nowrap; }
+.tabela-wrap--diaria th:first-child, .tabela-wrap--diaria td:first-child { text-align: left; }
+.tabela-wrap--diaria .th-titulo { text-align: center; text-transform: none; letter-spacing: 0; font-size: var(--fs-small); }
+
+/* ---- desempenho.css (KPIs e gráficos) ---- */
+.kpi-row { display: flex; flex-wrap: wrap; gap: 12px; margin: 0 0 20px; }
+.kpi-tile {
+  flex: 1; min-width: 140px; background: var(--surface); border-radius: 14px;
+  box-shadow: 0 1px 3px rgba(20, 41, 77, .1), 0 1px 2px rgba(20, 41, 77, .06);
+  padding: 14px 16px;
+}
+.kpi-label {
+  font-size: var(--fs-label); font-weight: 700; letter-spacing: .04em; text-transform: uppercase;
+  color: var(--txt-faint); margin-bottom: 6px;
+}
+.kpi-value { font-size: 24px; font-weight: 700; color: var(--txt); line-height: 1.1; }
+.kpi-sub { font-size: var(--fs-small); color: var(--txt-dim); margin-top: 4px; }
+
+.bloco--chart { margin: 0 0 22px; }
+.filtros--turno { justify-content: center; padding: 0 0 12px; gap: 8px; }
+.chart-card {
+  --grid: #e1e0d9; --muted: var(--txt-faint); --ink: var(--txt); --bar: var(--navy);
+  --turno1: #eb6834; --turno2: #2a78d6;
+  background: var(--surface); border-radius: 14px; padding: 14px 14px 8px;
+  box-shadow: 0 1px 3px rgba(20, 41, 77, .1), 0 1px 2px rgba(20, 41, 77, .06);
+  width: 100%; overflow-x: auto;
+}
+.chart-card svg { display: block; }
+.chart-card text { font-family: -apple-system, "Segoe UI", Roboto, Arial, sans-serif; }
+/* Largura real do SVG travada — os gráficos ficam ilegíveis se encolhidos
+   pra caber num celular; melhor manter tamanho legível e rolar de lado,
+   igual já acontece com as tabelas largas (.tabela-wrap). 1004px vem da
+   fórmula de svgColunasAgrupadas com DIAS_PARA_TRAS=29 (ver desempenho.js
+   original); se essa constante mudar, este valor fica levemente
+   desatualizado (inofensivo, só perde um pouco de precisão na rolagem). */
+#dspChartRanking svg, #dspChartMediaDia svg,
+#dspChartTempoOperador svg, #dspChartTempoTurno svg { width: 600px; max-width: none; }
+#dspChartTurnoDiario svg { width: 1004px; max-width: none; }
+#opChartMeuDia svg, #opChartTurnoDiario svg { width: 1004px; max-width: none; }
+
+.chart-legend {
+  display: flex; gap: 16px; justify-content: center; margin-bottom: 8px;
+  font-size: var(--fs-small); color: var(--txt-dim); font-weight: 600;
+}
+.legend-item { display: inline-flex; align-items: center; gap: 6px; }
+.legend-dot { width: 10px; height: 10px; border-radius: 3px; display: inline-block; }
+.legend-dot--1 { background: #eb6834; }
+.legend-dot--2 { background: #2a78d6; }
+
+.ver-tabela { margin-top: 10px; }
+.ver-tabela summary { cursor: pointer; font-size: var(--fs-small); font-weight: 600; color: var(--txt-dim); user-select: none; }
+.ver-tabela summary:hover { color: var(--txt); }
+.ver-tabela .tabela-wrap { margin-top: 10px; }
+
+/* ---- admin shell: abas fixas embaixo (mobile) ---- */
+#viewAdmin { flex: 1; flex-direction: column; padding: 4px 16px 78px; }
+#viewAdmin:not([hidden]) { display: flex; }
+.admin-view { display: none; }
+.admin-view.ativo { display: block; }
+.admin-tabs {
+  position: fixed; left: 0; right: 0; bottom: 0; z-index: 30;
+  display: flex; background: var(--surface); border-top: 1px solid var(--line);
+  box-shadow: 0 -1px 8px rgba(20, 41, 77, .1);
+  padding-bottom: env(safe-area-inset-bottom);
+}
+.admin-tabs .tab-pill {
+  flex: 1; text-align: center; background: transparent; border-radius: 0;
+  padding: 11px 4px 9px; font-size: 11px; letter-spacing: 0;
+}
+.admin-tabs .tab-pill.ativo { background: transparent; color: var(--navy); font-weight: 800; }
+.admin-tabs .badge-count { top: 2px; right: 14px; }
+</style>
+</head>
+<body class="operador-body">
+
+<section id="telaLogin" class="tela-login">
+  <div class="login-card">
+    <h1>Expedição</h1>
+    <p class="login-sub">Entre com seu usuário e senha</p>
+
+    <label class="campo-label" for="inputUsuario">Usuário</label>
+    <input id="inputUsuario" class="campo-grande" type="text" autocomplete="username" />
+
+    <label class="campo-label" for="inputSenha">Senha</label>
+    <input id="inputSenha" class="campo-grande" type="password" autocomplete="current-password" />
+
+    <div id="erroLogin" class="erro-login" hidden></div>
+
+    <button id="btnEntrar" class="btn-entrar" type="button">Entrar</button>
+  </div>
+</section>
+
+<header class="topbar" id="topoLogado" hidden>
+  <h1>Expedição</h1>
+  <div class="topo-sessao">
+    <span id="sessaoLabel"></span>
+    <button id="btnSairGlobal" class="btn-sair" type="button">Sair</button>
+  </div>
+</header>
+
+<div id="statusBanner" class="status-banner" hidden></div>
+
+<div id="viewAdmin" hidden>
+
+<section id="viewPainel" class="admin-view ativo" data-view="painel">
+  <div id="pnlMetaInfo" class="meta-info"></div>
+  <div id="pnlAlerta" class="alerta" hidden></div>
+  <nav class="filtros" id="pnlFiltros"></nav>
+  <div class="tabela-wrap">
+    <table>
+      <thead>
+        <tr>
+          <th>Carga Web</th>
+          <th>Status</th>
+          <th>Placa</th>
+          <th id="pnlThOperador" hidden>Operador</th>
+          <th>Empresa</th>
+          <th>Cultura</th>
+          <th>Entrou na Portaria</th>
+          <th class="num">Duração</th>
+          <th class="num">Duração total</th>
+        </tr>
+      </thead>
+      <tbody id="pnlCorpo"></tbody>
+    </table>
+    <div id="pnlVazio" class="vazio" hidden>Nenhuma carga encontrada.</div>
+  </div>
+</section>
+
+<section id="viewDistribuicao" class="admin-view" data-view="distribuicao">
+  <main class="resumo-main">
+    <div id="metaInfo" class="meta-info"></div>
+
+    <section class="bloco">
+      <h2>Operadores</h2>
+      <div class="operadores-card">
+        <div id="listaOperadores" class="chips-operadores"></div>
+        <form id="formOperador" class="form-operador">
+          <input id="inputOperador" type="text" placeholder="Nome do operador" maxlength="40" />
+          <input id="inputPin" type="text" inputmode="numeric" pattern="[0-9]*" placeholder="PIN (4 dígitos)" maxlength="4" class="input-pin" />
+          <select id="inputTurno" class="input-turno">
+            <option value="">Turno…</option>
+            <option value="1">Turno 1 (07:30)</option>
+            <option value="2">Turno 2 (19:30)</option>
+          </select>
+          <button type="submit">Adicionar</button>
+        </form>
+      </div>
+    </section>
+
+    <section class="bloco">
+      <h2>Adiantar separação</h2>
+      <div class="operadores-card">
+        <p class="aviso-inline" style="margin:0 0 10px">Só nos casos raros em que a carga precisa ser separada antes do caminhão ter "Entrou na Portaria" registrado no Hisower.</p>
+        <form id="formAntecipado" class="form-operador">
+          <input id="inputPlacaAntecipada" type="text" placeholder="Placa" maxlength="8" autocomplete="off" style="text-transform:uppercase" />
+          <select id="selOperadorAntecipado" class="input-turno"></select>
+          <button type="submit">Adiantar separação</button>
+        </form>
+        <div id="avisoAntecipado" class="aviso-inline" style="display:block;margin-top:8px" hidden></div>
+      </div>
+    </section>
+
+    <section class="bloco">
+      <h2>Resumo — cargas atribuídas por operador</h2>
+      <div class="resumo-turnos">
+        <div class="resumo-turno-col">
+          <h3>Turno 1</h3>
+          <div class="tabela-wrap">
+            <table>
+              <thead><tr><th>Operador</th><th class="num">Cargas atribuídas</th></tr></thead>
+              <tbody id="corpoResumoTurno1"></tbody>
+            </table>
+          </div>
+          <div id="vazioResumoTurno1" class="vazio" hidden>Nenhum operador no Turno 1.</div>
+        </div>
+        <div class="resumo-turno-col">
+          <h3>Turno 2</h3>
+          <div class="tabela-wrap">
+            <table>
+              <thead><tr><th>Operador</th><th class="num">Cargas atribuídas</th></tr></thead>
+              <tbody id="corpoResumoTurno2"></tbody>
+            </table>
+          </div>
+          <div id="vazioResumoTurno2" class="vazio" hidden>Nenhum operador no Turno 2.</div>
+        </div>
+        <div class="resumo-turno-col" id="colResumoSemTurno" hidden>
+          <h3>Sem turno definido</h3>
+          <div class="tabela-wrap">
+            <table>
+              <thead><tr><th>Operador</th><th class="num">Cargas atribuídas</th></tr></thead>
+              <tbody id="corpoResumoSemTurno"></tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <div class="busca-wrap">
+      <input id="inputBusca" type="text" class="input-busca" placeholder="Buscar por carga, placa, empresa ou cliente…" />
+    </div>
+
+    <section class="bloco">
+      <h2 id="tituloPendentes">Aguardando atribuição</h2>
+      <div class="tabela-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Carga Web</th>
+              <th>Placa</th>
+              <th>Empresa</th>
+              <th>Cliente</th>
+              <th>Ordem montada em</th>
+              <th>Operador</th>
+            </tr>
+          </thead>
+          <tbody id="corpoPendentes"></tbody>
+        </table>
+        <div id="vazioPendentes" class="vazio" hidden>Nenhuma carga aguardando atribuição.</div>
+      </div>
+    </section>
+
+    <section class="bloco">
+      <h2 id="tituloAtribuidas">Já atribuídas</h2>
+      <div class="tabela-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Carga Web</th>
+              <th>Placa</th>
+              <th>Empresa</th>
+              <th>Cliente</th>
+              <th>Operador</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody id="corpoAtribuidas"></tbody>
+        </table>
+        <div id="vazioAtribuidas" class="vazio" hidden>Nenhuma carga atribuída ainda.</div>
+      </div>
+    </section>
+  </main>
+</section>
+
+<section id="viewResumo" class="admin-view" data-view="resumo">
+  <div id="rsmCaptura" class="meta-info"></div>
+
+  <section class="bloco">
+    <h2>Cargas por status</h2>
+    <div class="tabela-wrap">
+      <table>
+        <thead><tr><th>Status</th><th class="num">Quantidade</th></tr></thead>
+        <tbody id="rsmCorpoStatus"></tbody>
+      </table>
+    </div>
+  </section>
+
+  <section class="bloco">
+    <h2>Total de carregamentos diários</h2>
+    <div class="tabela-wrap tabela-wrap--diaria">
+      <table id="rsmTabelaDiaria">
+        <thead id="rsmTheadDiaria"></thead>
+        <tbody id="rsmCorpoDiaria"></tbody>
+      </table>
+    </div>
+  </section>
+</section>
+
+<section id="viewDesempenho" class="admin-view" data-view="desempenho">
+  <div id="dspCaptura" class="meta-info"></div>
+
+  <section class="kpi-row">
+    <div class="kpi-tile">
+      <div class="kpi-label">Cargas separadas</div>
+      <div class="kpi-value" id="dspKpiTotal">—</div>
+      <div class="kpi-sub">últimos 30 dias</div>
+    </div>
+    <div class="kpi-tile">
+      <div class="kpi-label">Tempo médio de separação</div>
+      <div class="kpi-value" id="dspKpiTempoMedio">—</div>
+      <div class="kpi-sub">por carga, no período</div>
+    </div>
+    <div class="kpi-tile">
+      <div class="kpi-label">Operador destaque</div>
+      <div class="kpi-value" id="dspKpiDestaque">—</div>
+      <div class="kpi-sub" id="dspKpiDestaqueSub">—</div>
+    </div>
+  </section>
+
+  <section class="bloco bloco--chart">
+    <h2>Resumo — total de cargas por operador</h2>
+    <nav class="filtros filtros--turno" id="dspFiltroTurno">
+      <div class="tab-pill ativo" data-turno="todos">Todos os turnos</div>
+      <div class="tab-pill" data-turno="1">Turno 1</div>
+      <div class="tab-pill" data-turno="2">Turno 2</div>
+    </nav>
+    <div class="tabela-wrap">
+      <table>
+        <thead><tr><th>Turno</th><th>Operador</th><th class="num">Cargas separadas</th></tr></thead>
+        <tbody id="dspCorpoResumoOperador"></tbody>
+      </table>
+    </div>
+    <div id="dspVazioResumoOperador" class="vazio" hidden>Nenhuma separação concluída no período.</div>
+  </section>
+
+  <section class="bloco bloco--chart">
+    <h2>Cargas separadas por operador</h2>
+    <div class="chart-card" id="dspChartRanking"></div>
+    <details class="ver-tabela">
+      <summary>Ver como tabela</summary>
+      <div class="tabela-wrap">
+        <table>
+          <thead><tr><th>Operador</th><th>Turno</th><th class="num">Cargas separadas</th><th class="num">Tempo médio</th></tr></thead>
+          <tbody id="dspCorpoRanking"></tbody>
+        </table>
+      </div>
+    </details>
+    <div id="dspVazioRanking" class="vazio" hidden>Nenhuma separação concluída no período.</div>
+  </section>
+
+  <section class="bloco bloco--chart">
+    <h2>Média de cargas separadas por dia trabalhado</h2>
+    <div class="chart-card" id="dspChartMediaDia"></div>
+    <details class="ver-tabela">
+      <summary>Ver como tabela</summary>
+      <div class="tabela-wrap">
+        <table>
+          <thead><tr><th>Operador</th><th class="num">Média/dia</th><th class="num">Dias trabalhados</th></tr></thead>
+          <tbody id="dspCorpoMediaDia"></tbody>
+        </table>
+      </div>
+    </details>
+    <div id="dspVazioMediaDia" class="vazio" hidden>Nenhuma separação concluída no período.</div>
+  </section>
+
+  <section class="bloco bloco--chart">
+    <h2>Tempo médio de separação por operador</h2>
+    <div class="chart-card" id="dspChartTempoOperador"></div>
+    <details class="ver-tabela">
+      <summary>Ver como tabela</summary>
+      <div class="tabela-wrap">
+        <table>
+          <thead><tr><th>Operador</th><th class="num">Tempo médio</th></tr></thead>
+          <tbody id="dspCorpoTempoOperador"></tbody>
+        </table>
+      </div>
+    </details>
+    <div id="dspVazioTempoOperador" class="vazio" hidden>Nenhuma separação concluída no período.</div>
+  </section>
+
+  <section class="bloco bloco--chart">
+    <h2>Separações por dia — Turno 1 x Turno 2</h2>
+    <div class="chart-legend" id="dspLegendaTurno">
+      <span class="legend-item"><i class="legend-dot legend-dot--1"></i>Turno 1 (07:30)</span>
+      <span class="legend-item"><i class="legend-dot legend-dot--2"></i>Turno 2 (19:30)</span>
+    </div>
+    <div class="chart-card" id="dspChartTurnoDiario"></div>
+    <details class="ver-tabela">
+      <summary>Ver como tabela</summary>
+      <div class="tabela-wrap tabela-wrap--diaria">
+        <table id="dspTabelaTurnoDiaria">
+          <thead id="dspTheadTurnoDiaria"></thead>
+          <tbody id="dspCorpoTurnoDiaria"></tbody>
+        </table>
+      </div>
+    </details>
+    <div id="dspVazioTurnoDiario" class="vazio" hidden>Nenhuma separação concluída no período.</div>
+  </section>
+
+  <section class="bloco bloco--chart">
+    <h2>Tempo médio de separação por turno</h2>
+    <div class="chart-card" id="dspChartTempoTurno"></div>
+    <details class="ver-tabela">
+      <summary>Ver como tabela</summary>
+      <div class="tabela-wrap">
+        <table>
+          <thead><tr><th>Turno</th><th class="num">Tempo médio</th></tr></thead>
+          <tbody id="dspCorpoTempoTurno"></tbody>
+        </table>
+      </div>
+    </details>
+    <div id="dspVazioTempoTurno" class="vazio" hidden>Nenhuma separação concluída no período.</div>
+  </section>
+</section>
+
+<nav id="adminTabs" class="admin-tabs">
+  <div class="tab-pill ativo" data-view="painel">Painel</div>
+  <div class="tab-pill" data-view="distribuicao">Distribuição<span class="badge-count" id="adminBadgeDistribuicao" hidden>0</span></div>
+  <div class="tab-pill" data-view="resumo">Resumo</div>
+  <div class="tab-pill" data-view="desempenho">Desempenho</div>
+</nav>
+
+</div>
+
+<section id="telaOperador" class="tela-operador" hidden>
+  <div id="listaCargas" class="lista-cargas"></div>
+  <div id="vazioCargas" class="vazio-cargas" hidden>Nenhuma carga atribuída a você no momento.</div>
+
+  <section class="bloco bloco--chart" style="margin-top:24px">
+    <h2>Meu desempenho</h2>
+    <div class="kpi-row">
+      <div class="kpi-tile">
+        <div class="kpi-label">Cargas separadas</div>
+        <div class="kpi-value" id="opKpiTotal">—</div>
+        <div class="kpi-sub">últimos 30 dias</div>
+      </div>
+    </div>
+  </section>
+
+  <section class="bloco bloco--chart">
+    <h2>Minhas cargas separadas por dia</h2>
+    <div class="chart-card" id="opChartMeuDia"></div>
+    <div id="opVazioMeuDia" class="vazio" hidden>Nenhuma separação concluída no período.</div>
+  </section>
+
+  <section class="bloco bloco--chart">
+    <h2>Separações por dia — Turno 1 x Turno 2</h2>
+    <div class="chart-legend">
+      <span class="legend-item"><i class="legend-dot legend-dot--1"></i>Turno 1 (07:30)</span>
+      <span class="legend-item"><i class="legend-dot legend-dot--2"></i>Turno 2 (19:30)</span>
+    </div>
+    <div class="chart-card" id="opChartTurnoDiario"></div>
+    <div id="opVazioTurnoDiario" class="vazio" hidden>Nenhuma separação concluída no período.</div>
+  </section>
+</section>
+
+<script>
+/* ==================== firebaseConfig ====================
+   Cole aqui o config do seu projeto Firebase antes de enviar este arquivo
+   pro celular. Enquanto ficar vazio, roda em modo demo local. */
+window.EXP_FIREBASE_CONFIG = {
+  apiKey: "AIzaSyAUrrpV1v6NHL7AE4Uls3522QgVwbeb-_w",
+  projectId: "expedicao-dca5a"
+};
+</script>
+
+<script>
+/* ==================== logic.js ==================== */
+(function () {
+  "use strict";
+
+  var STATUS = {
+    AGUARDANDO_ORDEM: "Aguardando ordem",
+    AGUARDANDO_SEPARACAO: "Aguardando Separação",
+    EM_SEPARACAO: "Em separação",
+    AGUARDANDO_CARREGAMENTO: "Aguardando Carregamento",
+    EM_CARREGAMENTO: "Em carregamento",
+    CARREGADO: "Carregado"
+  };
+
+  var EMPRESAS = ["Dois Marcos", "Basf", "Multiplicação"];
+
+  var STATUS_META = [
+    { key: STATUS.AGUARDANDO_ORDEM, color: "#d32f2f" },
+    { key: STATUS.AGUARDANDO_SEPARACAO, color: "#e65100" },
+    { key: STATUS.EM_SEPARACAO, color: "#8a6d00" },
+    { key: STATUS.AGUARDANDO_CARREGAMENTO, color: "#0277bd" },
+    { key: STATUS.EM_CARREGAMENTO, color: "#5e35b1" },
+    { key: STATUS.CARREGADO, color: "#2e7d32" }
+  ];
+
+  function isFilled(v) {
+    return v != null && String(v).trim() !== "" && String(v).trim() !== "-";
+  }
+
+  function parseBR(s) {
+    if (!isFilled(s)) return null;
+    var m = String(s).match(/(\d{2})\/(\d{2})\/(\d{4})(?:\s+(\d{2}):(\d{2}))?/);
+    if (!m) return null;
+    return new Date(+m[3], +m[2] - 1, +m[1], m[4] ? +m[4] : 0, m[5] ? +m[5] : 0);
+  }
+
+  function toNum(v) {
+    if (!isFilled(v)) return 0;
+    var s = String(v).replace(/\./g, "").replace(",", ".").replace(/[^0-9.\-]/g, "");
+    var n = parseFloat(s);
+    return isNaN(n) ? 0 : n;
+  }
+
+  function distinctConcat(list) {
+    var seen = {};
+    var out = [];
+    list.forEach(function (v) {
+      if (isFilled(v) && !seen[v]) {
+        seen[v] = 1;
+        out.push(String(v).trim());
+      }
+    });
+    return out.join(", ");
+  }
+
+  // Extrai o nome da cultura do campo "Safra" do Hisower — formato
+  // "76 - 2025/2026V - MILHO" (código - safra - cultura). Pega o que vem
+  // depois do último " - " e deixa em Title Case ("MILHO" -> "Milho").
+  function culturaDe(safra) {
+    if (!isFilled(safra)) return "";
+    var partes = String(safra).split(" - ");
+    var nome = partes[partes.length - 1].trim();
+    return nome.toLowerCase().replace(/(^|\s)\S/g, function (c) { return c.toUpperCase(); });
+  }
+
+  function chaveDe(placa, entrou) {
+    return String(placa || "").trim().toUpperCase() + " | " + String(entrou || "").trim();
+  }
+
+  // Chave provisória de separação antecipada (antes de "Entrou na
+  // Portaria" existir) — ver extension/logic.js pra explicação completa.
+  function chavePendente(placa) {
+    return "PEND:" + String(placa || "").trim().toUpperCase();
+  }
+
+  function ehChavePendente(chave) {
+    return String(chave || "").indexOf("PEND:") === 0;
+  }
+
+  function placaDaChave(chave) {
+    var s = String(chave || "");
+    if (ehChavePendente(s)) return s.slice(5);
+    var i = s.indexOf(" | ");
+    return i === -1 ? s : s.slice(0, i);
+  }
+
+  function agregar(rows, separacao) {
+    separacao = separacao || {};
+    var grupos = {};
+    (rows || []).forEach(function (r) {
+      if (!isFilled(r.placa)) return;
+      if (isFilled(r.entrouPortaria)) {
+        var k = chaveDe(r.placa, r.entrouPortaria);
+        (grupos[k] = grupos[k] || []).push(r);
+        return;
+      }
+      var kPend = chavePendente(r.placa);
+      if (separacao[kPend]) {
+        (grupos[kPend] = grupos[kPend] || []).push(r);
+      }
+    });
+
+    // Placas que já têm uma linha REAL do Hisower (com "Entrou na Portaria")
+    // nesta captura — evita duplicar o card quando a linha real chega mas o
+    // registro "PEND:placa" ainda não foi limpo (a limpeza só acontece na
+    // próxima gravação sob a chave real, não é automática só por a linha existir).
+    var placasComLinhaReal = {};
+    Object.keys(grupos).forEach(function (k) {
+      if (!ehChavePendente(k)) placasComLinhaReal[placaDaChave(k)] = true;
+    });
+
+    // Separação antecipada cuja placa ainda não tem NENHUMA linha no Hisower
+    // (nem "órfã" sem "Entrou na Portaria") — cria uma carga provisória só
+    // com a placa, pra aparecer e poder ser acompanhada. Funde com os dados
+    // reais (empresa, cliente, cultura, etc.) assim que o Hisower lançar a
+    // linha, pela mesma chave "PEND:placa" usada acima.
+    Object.keys(separacao).forEach(function (k) {
+      if (!ehChavePendente(k)) return;
+      if (grupos[k]) return;
+      if (placasComLinhaReal[placaDaChave(k)]) return;
+      grupos[k] = [{ placa: placaDaChave(k) }];
+    });
+
+    var cargas = [];
+    Object.keys(grupos).forEach(function (k) {
+      var g = grupos[k];
+      var sep = separacao[k];
+      var antecipada = ehChavePendente(k);
+      if (!sep && !antecipada) {
+        var orfa = chavePendente(placaDaChave(k));
+        if (separacao[orfa]) { sep = separacao[orfa]; antecipada = true; }
+      }
+      cargas.push(montarCarga(k, g, sep, antecipada));
+    });
+    return cargas;
+  }
+
+  function montarCarga(chave, g, sep, antecipada) {
+    var placa = (g[0].placa || "").trim().toUpperCase();
+    var entrouRaw = (g[0].entrouPortaria || "").trim();
+
+    var ordemAll = antecipada || g.every(function (r) { return isFilled(r.ordemMontadaEm); });
+    var carregInicioAny = g.some(function (r) { return isFilled(r.inicioCarregEm); });
+    var carregFimAll = g.every(function (r) { return isFilled(r.terminoCarregEm); });
+
+    var ordemMontadaTs = maxTs(g.map(function (r) { return parseBR(r.ordemMontadaEm); }));
+    var inicioCarregTs = minTs(g.map(function (r) { return parseBR(r.inicioCarregEm); }));
+    var terminoCarregTs = maxTs(g.map(function (r) { return parseBR(r.terminoCarregEm); }));
+
+    var clientes = g.map(function (r) { return r.cliente; });
+    var ehBasf = clientes.some(function (c) {
+      return isFilled(c) && String(c).toUpperCase().indexOf("BASF") !== -1;
+    });
+    var ehMultiplicador = g.some(function (r) {
+      return isFilled(r.tipoCliente) && String(r.tipoCliente).trim().toLowerCase() === "multiplicador";
+    });
+    var empresa = ehBasf ? "Basf" : (ehMultiplicador ? "Multiplicação" : "Dois Marcos");
+
+    var sepInicioTs = sep && isFilled(sep.inicioEm) ? new Date(sep.inicioEm) : null;
+    var sepFimTs = sep && isFilled(sep.fimEm) ? new Date(sep.fimEm) : null;
+
+    var carga = {
+      chave: chave,
+      placa: placa,
+      progWeb: distinctConcat(g.map(function (r) { return r.progWeb; })) || "—",
+      prog: distinctConcat(g.map(function (r) { return r.prog; })) || "—",
+      empresa: empresa,
+      cultura: distinctConcat(g.map(function (r) { return culturaDe(r.safra); })) || "—",
+      cliente: distinctConcat(clientes),
+      entrouPortaria: entrouRaw,
+      entrouPortariaTs: parseBR(entrouRaw),
+      linhas: g.length,
+      operador: sep && sep.operador ? sep.operador : null,
+      qtdParaCarregar: sum(g, "qtdParaCarregar"),
+      qtdSeparada: sum(g, "qtdSeparada"),
+      qtdCarregada: sum(g, "qtdCarregada"),
+      pesoKg: sum(g, "pesoKg"),
+      sc40kg: sum(g, "sc40kg"),
+      _flags: {
+        ordemAll: ordemAll,
+        carregInicioAny: carregInicioAny,
+        carregFimAll: carregFimAll,
+        ordemMontadaTs: ordemMontadaTs,
+        inicioCarregTs: inicioCarregTs,
+        terminoCarregTs: terminoCarregTs,
+        sepInicioTs: sepInicioTs,
+        sepFimTs: sepFimTs
+      }
+    };
+    return carga;
+  }
+
+  function statusDe(carga) {
+    var f = carga._flags;
+    if (f.carregFimAll) return { status: STATUS.CARREGADO, desde: f.terminoCarregTs };
+    if (f.carregInicioAny) return { status: STATUS.EM_CARREGAMENTO, desde: f.inicioCarregTs };
+    if (f.sepFimTs) return { status: STATUS.AGUARDANDO_CARREGAMENTO, desde: f.sepFimTs };
+    if (f.sepInicioTs) return { status: STATUS.EM_SEPARACAO, desde: f.sepInicioTs };
+    if (f.ordemAll) return { status: STATUS.AGUARDANDO_SEPARACAO, desde: f.ordemMontadaTs };
+    return { status: STATUS.AGUARDANDO_ORDEM, desde: carga.entrouPortariaTs };
+  }
+
+  function computar(carga, agora) {
+    var s = statusDe(carga);
+    var fim = s.status === STATUS.CARREGADO && carga._flags.terminoCarregTs
+      ? carga._flags.terminoCarregTs.getTime()
+      : agora;
+
+    var duracaoStatus = s.desde ? agora - s.desde.getTime() : null;
+    var duracaoTotal = carga.entrouPortariaTs ? fim - carga.entrouPortariaTs.getTime() : null;
+
+    return {
+      status: s.status,
+      desde: s.desde,
+      duracaoStatusMs: duracaoStatus,
+      duracaoTotalMs: duracaoTotal
+    };
+  }
+
+  function fmtDur(ms) {
+    if (ms == null || isNaN(ms) || ms < 0) return "—";
+    var s = Math.floor(ms / 1000);
+    var d = Math.floor(s / 86400); s -= d * 86400;
+    var h = Math.floor(s / 3600); s -= h * 3600;
+    var m = Math.floor(s / 60);
+    var out = "";
+    if (d) out += d + "d ";
+    out += String(h).padStart(2, "0") + "h " + String(m).padStart(2, "0") + "m";
+    return out;
+  }
+
+  function corStatus(status) {
+    for (var i = 0; i < STATUS_META.length; i++) {
+      if (STATUS_META[i].key === status) return STATUS_META[i].color;
+    }
+    return "#9e9e9e";
+  }
+
+  function ordemStatus(status) {
+    for (var i = 0; i < STATUS_META.length; i++) {
+      if (STATUS_META[i].key === status) return i;
+    }
+    return 99;
+  }
+
+  var HORA_MS = 3600000;
+
+  function nivelDuracao(status, ms) {
+    if (ms == null || status === STATUS.CARREGADO) return null;
+    var amarelo = status === STATUS.AGUARDANDO_ORDEM ? 1 * HORA_MS : 6 * HORA_MS;
+    var vermelho = status === STATUS.AGUARDANDO_ORDEM ? 3 * HORA_MS : 12 * HORA_MS;
+    if (ms >= vermelho) return "vermelho";
+    if (ms >= amarelo) return "amarelo";
+    return null;
+  }
+
+  function nivelTempoTotal(ms) {
+    if (ms == null) return null;
+    if (ms >= 24 * HORA_MS) return "vermelho";
+    if (ms >= 12 * HORA_MS) return "amarelo";
+    return null;
+  }
+
+  function mesmoDia(a, b) {
+    return !!a && !!b &&
+      a.getFullYear() === b.getFullYear() &&
+      a.getMonth() === b.getMonth() &&
+      a.getDate() === b.getDate();
+  }
+
+  var MESES = ["jan", "fev", "mar", "abr", "mai", "jun", "jul", "ago", "set", "out", "nov", "dez"];
+  function diaKey(d) {
+    return d.getFullYear() + "-" + String(d.getMonth() + 1).padStart(2, "0") + "-" + String(d.getDate()).padStart(2, "0");
+  }
+  function diaLabel(d) {
+    return String(d.getDate()).padStart(2, "0") + "/" + MESES[d.getMonth()];
+  }
+
+  function matrizDiaria(cargas, diasParaTras, refAgora) {
+    var hojeRef = refAgora || new Date();
+    var hoje = new Date(hojeRef.getFullYear(), hojeRef.getMonth(), hojeRef.getDate());
+
+    var dias = [];
+    for (var i = diasParaTras; i >= 0; i--) {
+      var d = new Date(hoje);
+      d.setDate(d.getDate() - i);
+      dias.push({ key: diaKey(d), label: diaLabel(d) });
+    }
+
+    var matriz = {};
+    EMPRESAS.forEach(function (e) {
+      matriz[e] = {};
+      dias.forEach(function (dd) { matriz[e][dd.key] = 0; });
+    });
+
+    (cargas || []).forEach(function (c) {
+      if (!c._flags || !c._flags.carregFimAll || !c._flags.terminoCarregTs) return;
+      var k = diaKey(c._flags.terminoCarregTs);
+      if (!matriz[c.empresa] || !(k in matriz[c.empresa])) return;
+      matriz[c.empresa][k] += 1;
+    });
+
+    var totais = {};
+    dias.forEach(function (dd) {
+      totais[dd.key] = EMPRESAS.reduce(function (acc, e) { return acc + matriz[e][dd.key]; }, 0);
+    });
+
+    return { dias: dias, empresas: EMPRESAS, matriz: matriz, totais: totais };
+  }
+
+  var INICIO_TURNO1_MIN = 7 * 60 + 30;
+  var INICIO_TURNO2_MIN = 19 * 60 + 30;
+  var TURNO_META = [
+    { turno: 1, label: "Turno 1 (07:30)" },
+    { turno: 2, label: "Turno 2 (19:30)" }
+  ];
+
+  function turnoDe(ts) {
+    var min = ts.getHours() * 60 + ts.getMinutes();
+    return (min >= INICIO_TURNO1_MIN && min < INICIO_TURNO2_MIN) ? 1 : 2;
+  }
+
+  function desempenhoOperadores(cargas, diasParaTras, refAgora, operadoresRoster) {
+    var hojeRef = refAgora || new Date();
+    var hoje = new Date(hojeRef.getFullYear(), hojeRef.getMonth(), hojeRef.getDate());
+    var inicioPeriodo = new Date(hoje);
+    inicioPeriodo.setDate(inicioPeriodo.getDate() - diasParaTras);
+
+    var dias = [];
+    for (var i = diasParaTras; i >= 0; i--) {
+      var d = new Date(hoje);
+      d.setDate(d.getDate() - i);
+      dias.push({ key: diaKey(d), label: diaLabel(d) });
+    }
+
+    var turnoCadastradoPorNome = {};
+    (operadoresRoster || []).forEach(function (o) { turnoCadastradoPorNome[o.nome] = o.turno || null; });
+
+    var porOperador = {};
+    var porTurno = {
+      1: { turno: 1, total: 0, somaMs: 0, porDia: {} },
+      2: { turno: 2, total: 0, somaMs: 0, porDia: {} }
+    };
+    dias.forEach(function (dd) { porTurno[1].porDia[dd.key] = 0; porTurno[2].porDia[dd.key] = 0; });
+
+    (cargas || []).forEach(function (c) {
+      if (!c.operador) return;
+      var f = c._flags;
+      if (!f || !f.sepInicioTs || !f.sepFimTs) return;
+      if (f.sepFimTs < inicioPeriodo) return;
+
+      if (!porOperador[c.operador]) {
+        porOperador[c.operador] = { nome: c.operador, total: 0, somaMs: 0, porDia: {}, diasTrabalhados: {} };
+        dias.forEach(function (dd) { porOperador[c.operador].porDia[dd.key] = 0; });
+      }
+      var reg = porOperador[c.operador];
+      var durMs = f.sepFimTs.getTime() - f.sepInicioTs.getTime();
+      var kDia = diaKey(f.sepInicioTs);
+
+      reg.total += 1;
+      reg.somaMs += durMs;
+      if (kDia in reg.porDia) reg.porDia[kDia] += 1;
+      reg.diasTrabalhados[kDia] = true;
+
+      var turno = turnoDe(f.sepInicioTs);
+      var regT = porTurno[turno];
+      regT.total += 1;
+      regT.somaMs += durMs;
+      if (kDia in regT.porDia) regT.porDia[kDia] += 1;
+    });
+
+    var operadores = Object.keys(porOperador).map(function (nome) {
+      var r = porOperador[nome];
+      var diasCount = Object.keys(r.diasTrabalhados).length;
+      return {
+        nome: r.nome,
+        turnoCadastrado: turnoCadastradoPorNome[nome] || null,
+        total: r.total,
+        tempoMedioMs: r.total ? r.somaMs / r.total : null,
+        mediaPorDia: diasCount ? r.total / diasCount : null,
+        diasTrabalhados: diasCount,
+        porDia: r.porDia
+      };
+    }).sort(function (a, b) { return b.total - a.total; });
+
+    var turnos = TURNO_META.map(function (tm) {
+      var r = porTurno[tm.turno];
+      return {
+        turno: tm.turno,
+        label: tm.label,
+        total: r.total,
+        tempoMedioMs: r.total ? r.somaMs / r.total : null,
+        porDia: r.porDia
+      };
+    });
+
+    return { dias: dias, operadores: operadores, turnos: turnos };
+  }
+
+  function sum(g, key) {
+    return g.reduce(function (acc, r) { return acc + toNum(r[key]); }, 0);
+  }
+  function minTs(list) {
+    var v = null;
+    list.forEach(function (d) { if (d && (!v || d < v)) v = d; });
+    return v;
+  }
+  function maxTs(list) {
+    var v = null;
+    list.forEach(function (d) { if (d && (!v || d > v)) v = d; });
+    return v;
+  }
+
+  window.Exp = {
+    STATUS: STATUS,
+    STATUS_META: STATUS_META,
+    EMPRESAS: EMPRESAS,
+    isFilled: isFilled,
+    parseBR: parseBR,
+    chaveDe: chaveDe,
+    chavePendente: chavePendente,
+    ehChavePendente: ehChavePendente,
+    placaDaChave: placaDaChave,
+    agregar: agregar,
+    computar: computar,
+    fmtDur: fmtDur,
+    corStatus: corStatus,
+    ordemStatus: ordemStatus,
+    mesmoDia: mesmoDia,
+    matrizDiaria: matrizDiaria,
+    turnoDe: turnoDe,
+    TURNO_META: TURNO_META,
+    desempenhoOperadores: desempenhoOperadores,
+    nivelDuracao: nivelDuracao,
+    nivelTempoTotal: nivelTempoTotal
+  };
+})();
+</script>
+
+<script>
+/* ==================== firestore-client.js ==================== */
+(function () {
+  "use strict";
+
+  var CONFIG = window.EXP_FIREBASE_CONFIG || null;
+  var AUTH_KEY = "exp_fbAuth";
+
+  function temConfig() {
+    return !!(CONFIG && CONFIG.apiKey && CONFIG.projectId);
+  }
+
+  // Timeout de segurança pra qualquer chamada ao Firestore/Identity Toolkit.
+  // Em alguns contextos (ex.: o arquivo aberto via WhatsApp/Mensagens no
+  // iPhone, que roda a página numa aba sandboxada) o fetch() nunca resolve
+  // NEM rejeita — sem isso, a tela de login fica travada pra sempre
+  // esperando uma resposta que nunca chega. Com o timeout, o .catch() de
+  // cada chamada dispara normalmente e a tela cai pro modo local/offline.
+  var FETCH_TIMEOUT_MS = 10000;
+  function fetchComTimeout(url, opts) {
+    return new Promise(function (resolve, reject) {
+      var atendido = false;
+      var timer = setTimeout(function () {
+        if (atendido) return;
+        atendido = true;
+        reject(new Error("Tempo esgotado ao conectar com o Firestore."));
+      }, FETCH_TIMEOUT_MS);
+      fetch(url, opts).then(function (res) {
+        if (atendido) return;
+        atendido = true;
+        clearTimeout(timer);
+        resolve(res);
+      }, function (e) {
+        if (atendido) return;
+        atendido = true;
+        clearTimeout(timer);
+        reject(e);
+      });
+    });
+  }
+
+  function lerAuth() {
+    return new Promise(function (resolve) {
+      try { resolve(JSON.parse(localStorage.getItem(AUTH_KEY) || "null")); }
+      catch (e) { resolve(null); }
+    });
+  }
+
+  function gravarAuth(auth) {
+    return new Promise(function (resolve) {
+      try { localStorage.setItem(AUTH_KEY, JSON.stringify(auth)); } catch (e) { /* ignore */ }
+      resolve();
+    });
+  }
+
+  function signUpAnonimo() {
+    return fetchComTimeout("https://identitytoolkit.googleapis.com/v1/accounts:signUp?key=" + CONFIG.apiKey, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ returnSecureToken: true })
+    }).then(function (res) {
+      if (!res.ok) throw new Error("Falha no login anônimo: HTTP " + res.status);
+      return res.json();
+    }).then(function (r) {
+      return {
+        idToken: r.idToken,
+        refreshToken: r.refreshToken,
+        localId: r.localId,
+        expiresAt: Date.now() + (Number(r.expiresIn) * 1000)
+      };
+    });
+  }
+
+  function renovarToken(refreshToken) {
+    return fetchComTimeout("https://securetoken.googleapis.com/v1/token?key=" + CONFIG.apiKey, {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: "grant_type=refresh_token&refresh_token=" + encodeURIComponent(refreshToken)
+    }).then(function (res) {
+      if (!res.ok) throw new Error("Falha ao renovar token: HTTP " + res.status);
+      return res.json();
+    }).then(function (r) {
+      return {
+        idToken: r.id_token,
+        refreshToken: r.refresh_token,
+        localId: r.user_id,
+        expiresAt: Date.now() + (Number(r.expires_in) * 1000)
+      };
+    });
+  }
+
+  var MARGEM_MS = 5 * 60000;
+
+  function ensureAuth() {
+    if (!temConfig()) return Promise.reject(new Error("firebaseConfig não configurado."));
+    return lerAuth().then(function (auth) {
+      if (auth && auth.idToken && auth.expiresAt > Date.now() + MARGEM_MS) {
+        return auth;
+      }
+      var renovar = auth && auth.refreshToken ? renovarToken(auth.refreshToken) : signUpAnonimo();
+      return renovar.catch(function () { return signUpAnonimo(); }).then(function (novo) {
+        return gravarAuth(novo).then(function () { return novo; });
+      });
+    });
+  }
+
+  function paraValorFirestore(v) {
+    if (v === null || v === undefined) return { nullValue: null };
+    if (typeof v === "string") return { stringValue: v };
+    if (typeof v === "boolean") return { booleanValue: v };
+    if (typeof v === "number") {
+      return Number.isInteger(v) ? { integerValue: String(v) } : { doubleValue: v };
+    }
+    if (Array.isArray(v)) {
+      return { arrayValue: { values: v.map(paraValorFirestore) } };
+    }
+    if (typeof v === "object") {
+      return { mapValue: { fields: paraCamposFirestore(v) } };
+    }
+    return { stringValue: String(v) };
+  }
+
+  function paraCamposFirestore(obj) {
+    var fields = {};
+    Object.keys(obj || {}).forEach(function (k) {
+      if (obj[k] !== undefined) fields[k] = paraValorFirestore(obj[k]);
+    });
+    return fields;
+  }
+
+  function deValorFirestore(v) {
+    if (!v) return null;
+    if ("stringValue" in v) return v.stringValue;
+    if ("integerValue" in v) return parseInt(v.integerValue, 10);
+    if ("doubleValue" in v) return v.doubleValue;
+    if ("booleanValue" in v) return v.booleanValue;
+    if ("timestampValue" in v) return v.timestampValue;
+    if ("nullValue" in v) return null;
+    if ("arrayValue" in v) return ((v.arrayValue && v.arrayValue.values) || []).map(deValorFirestore);
+    if ("mapValue" in v) return deCamposFirestore((v.mapValue && v.mapValue.fields) || {});
+    return null;
+  }
+
+  function deCamposFirestore(fields) {
+    var obj = {};
+    Object.keys(fields || {}).forEach(function (k) { obj[k] = deValorFirestore(fields[k]); });
+    return obj;
+  }
+
+  function urlDoc(colecao, id) {
+    return "https://firestore.googleapis.com/v1/projects/" + CONFIG.projectId +
+      "/databases/(default)/documents/" + colecao + "/" + encodeURIComponent(id);
+  }
+
+  function getDoc(colecao, id) {
+    return ensureAuth().then(function (auth) {
+      return fetchComTimeout(urlDoc(colecao, id), {
+        headers: { Authorization: "Bearer " + auth.idToken }
+      });
+    }).then(function (res) {
+      if (res.status === 404) return null;
+      if (!res.ok) throw new Error("Firestore getDoc HTTP " + res.status);
+      return res.json();
+    }).then(function (json) {
+      return json ? deCamposFirestore(json.fields || {}) : null;
+    });
+  }
+
+  function setDoc(colecao, id, objetoPlano, opts) {
+    opts = opts || {};
+    return ensureAuth().then(function (auth) {
+      var chaves = Object.keys(objetoPlano || {});
+      var query = opts.merge
+        ? "?" + chaves.map(function (k) { return "updateMask.fieldPaths=" + encodeURIComponent(k); }).join("&")
+        : "";
+      return fetchComTimeout(urlDoc(colecao, id) + query, {
+        method: "PATCH",
+        headers: {
+          Authorization: "Bearer " + auth.idToken,
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({ fields: paraCamposFirestore(objetoPlano) })
+      });
+    }).then(function (res) {
+      if (!res.ok) throw new Error("Firestore setDoc HTTP " + res.status);
+      return res.json();
+    });
+  }
+
+  function listCollection(colecao) {
+    return ensureAuth().then(function (auth) {
+      return fetchComTimeout(urlColecao(colecao) + "?pageSize=300", {
+        headers: { Authorization: "Bearer " + auth.idToken }
+      });
+    }).then(function (res) {
+      if (!res.ok) throw new Error("Firestore listCollection HTTP " + res.status);
+      return res.json();
+    }).then(function (json) {
+      return (json.documents || []).map(function (doc) {
+        var partes = doc.name.split("/");
+        var obj = deCamposFirestore(doc.fields || {});
+        obj._id = partes[partes.length - 1];
+        return obj;
+      });
+    });
+  }
+
+  function urlColecao(colecao) {
+    return "https://firestore.googleapis.com/v1/projects/" + CONFIG.projectId +
+      "/databases/(default)/documents/" + colecao;
+  }
+
+  function deleteDoc(colecao, id) {
+    return ensureAuth().then(function (auth) {
+      return fetchComTimeout(urlDoc(colecao, id), {
+        method: "DELETE",
+        headers: { Authorization: "Bearer " + auth.idToken }
+      });
+    }).then(function (res) {
+      if (!res.ok && res.status !== 404) throw new Error("Firestore deleteDoc HTTP " + res.status);
+    });
+  }
+
+  function chaveParaDocId(chave) {
+    return String(chave || "").replace(/\//g, "-");
+  }
+
+  window.Exp = window.Exp || {};
+  window.Exp.Db = {
+    temConfig: temConfig,
+    ensureAuth: ensureAuth,
+    getDoc: getDoc,
+    setDoc: setDoc,
+    deleteDoc: deleteDoc,
+    listCollection: listCollection,
+    chaveParaDocId: chaveParaDocId
+  };
+})();
+</script>
+
+<script>
+/* ==================== dashboard.js (adaptado: Firestore em vez de chrome.storage, IDs com prefixo pnl) ==================== */
+(function () {
+  "use strict";
+
+  var E = window.Exp;
+  window.Exp.AdminViews = window.Exp.AdminViews || {};
+  var estado = { rows: [], separacao: {}, capturedAt: null, filtro: null };
+
+  var corpo = document.getElementById("pnlCorpo");
+  var vazio = document.getElementById("pnlVazio");
+  var metaInfo = document.getElementById("pnlMetaInfo");
+  var filtros = document.getElementById("pnlFiltros");
+  var alerta = document.getElementById("pnlAlerta");
+  var thOperador = document.getElementById("pnlThOperador");
+
+  function usaFirestore() {
+    return !!(E.Db && E.Db.temConfig());
+  }
+
+  function avisarBadge() {
+    if (E.AdminShell) E.AdminShell.atualizarBadgeComDados(estado.rows, estado.separacao);
+  }
+
+  function carregarDemo() {
+    try {
+      var demo = JSON.parse(localStorage.getItem("exp_demo") || "{}");
+      estado.rows = demo.hisowerRows || [];
+      estado.separacao = demo.separacao || {};
+      estado.capturedAt = demo.capturedAt || null;
+    } catch (e) { /* ignore */ }
+    render();
+    avisarBadge();
+  }
+
+  function carregar() {
+    if (usaFirestore()) {
+      Promise.all([
+        E.Db.getDoc("estado", "hisowerRows"),
+        E.Db.listCollection("separacao")
+      ]).then(function (r) {
+        estado.rows = (r[0] && r[0].rows) || [];
+        estado.capturedAt = (r[0] && r[0].capturedAt) || null;
+        var mapa = {};
+        (r[1] || []).forEach(function (doc) { if (doc.chaveOriginal) mapa[doc.chaveOriginal] = doc; });
+        estado.separacao = mapa;
+        alerta.hidden = !(r[0] && r[0].erroCaptura);
+        alerta.textContent = (r[0] && r[0].erroCaptura) || "";
+        render();
+        avisarBadge();
+      }).catch(carregarDemo);
+    } else {
+      carregarDemo();
+    }
+  }
+
+  function render() {
+    var agora = Date.now();
+    var hoje = new Date(agora);
+    var cargas = E.agregar(estado.rows, estado.separacao).map(function (c) {
+      var r = E.computar(c, agora);
+      c._c = r;
+      return c;
+    }).filter(function (c) {
+      if (c._c.status !== E.STATUS.CARREGADO) return true;
+      return E.mesmoDia(c._c.desde, hoje);
+    });
+
+    var contagem = {};
+    E.STATUS_META.forEach(function (m) { contagem[m.key] = 0; });
+    cargas.forEach(function (c) { contagem[c._c.status] = (contagem[c._c.status] || 0) + 1; });
+    renderFiltros(contagem, cargas.length);
+
+    var lista = cargas.filter(function (c) {
+      return !estado.filtro || c._c.status === estado.filtro;
+    });
+    lista.sort(function (a, b) {
+      var d = E.ordemStatus(a._c.status) - E.ordemStatus(b._c.status);
+      if (d) return d;
+      var ta = a.entrouPortariaTs ? a.entrouPortariaTs.getTime() : 0;
+      var tb = b.entrouPortariaTs ? b.entrouPortariaTs.getTime() : 0;
+      return ta - tb;
+    });
+
+    var mostraOperador = estado.filtro === E.STATUS.AGUARDANDO_SEPARACAO || estado.filtro === E.STATUS.EM_SEPARACAO;
+    thOperador.hidden = !mostraOperador;
+
+    corpo.innerHTML = "";
+    lista.forEach(function (c) { corpo.appendChild(linha(c, mostraOperador)); });
+
+    vazio.hidden = cargas.length > 0;
+    metaInfo.textContent = cargas.length + " cargas" +
+      (estado.capturedAt ? " · atualizado " + new Date(estado.capturedAt).toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" }) : "");
+  }
+
+  function renderFiltros(contagem, total) {
+    filtros.innerHTML = "";
+    filtros.appendChild(stat(null, "Todas", total));
+    E.STATUS_META.forEach(function (m) {
+      filtros.appendChild(stat(m.key, m.key, contagem[m.key] || 0));
+    });
+  }
+
+  function stat(key, label, count) {
+    var el = document.createElement("div");
+    var ativo = estado.filtro === key;
+    el.className = "tab-pill" + (ativo ? " ativo" : "");
+    el.innerHTML = esc(label) +
+      (count > 0 ? '<span class="badge-count">' + count + "</span>" : "");
+    el.addEventListener("click", function () {
+      estado.filtro = estado.filtro === key ? null : key;
+      render();
+    });
+    return el;
+  }
+
+  function linha(c, mostraOperador) {
+    var tr = document.createElement("tr");
+    var cor = E.corStatus(c._c.status);
+
+    var tdCarga = td('<span class="carga-web">' + esc(c.progWeb) + "</span>");
+    var tdStatus = td('<span class="status-badge" style="background:' + cor + '">' + esc(c._c.status) + "</span>");
+    var tdPlaca = td('<span class="placa">' + esc(c.placa) + "</span>");
+
+    var tdOperador = td(esc(c.operador || "—"));
+    tdOperador.hidden = !mostraOperador;
+
+    var empClass = "empresa-tag" +
+      (c.empresa === "Basf" ? " empresa-basf" : c.empresa === "Multiplicação" ? " empresa-multiplicacao" : "");
+    var tdEmpresa = td('<span class="' + empClass + '">' + esc(c.empresa) + "</span>");
+
+    var tdCultura = td(esc(c.cultura));
+
+    var tdEntrou = td(esc(c.entrouPortaria));
+
+    var ehCarregado = c._c.status === E.STATUS.CARREGADO;
+    var nivelDur = E.nivelDuracao(c._c.status, c._c.duracaoStatusMs);
+    var tdDuracao = td(
+      ehCarregado ? "—" : E.fmtDur(c._c.duracaoStatusMs),
+      "num" + (nivelDur ? " nivel-" + nivelDur : "")
+    );
+
+    var nivelTotal = E.nivelTempoTotal(c._c.duracaoTotalMs);
+    var tdTotal = td(
+      E.fmtDur(c._c.duracaoTotalMs),
+      "num" + (nivelTotal ? " nivel-" + nivelTotal : "")
+    );
+
+    [tdCarga, tdStatus, tdPlaca, tdOperador, tdEmpresa, tdCultura, tdEntrou, tdDuracao, tdTotal].forEach(function (x) {
+      tr.appendChild(x);
+    });
+    return tr;
+  }
+
+  function td(html, cls) {
+    var e = document.createElement("td");
+    if (cls) e.className = cls;
+    e.innerHTML = html;
+    return e;
+  }
+  function esc(s) {
+    return String(s == null ? "" : s)
+      .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  }
+
+  var intervalId = null;
+  function ativar() { carregar(); intervalId = setInterval(carregar, 30000); }
+  function desativar() { if (intervalId) { clearInterval(intervalId); intervalId = null; } }
+  window.Exp.AdminViews.painel = { ativar: ativar, desativar: desativar };
+})();
+</script>
+
+<script>
+/* ==================== distribuicao.js (adaptado: Firestore em vez de chrome.storage) ==================== */
+(function () {
+  "use strict";
+
+  var E = window.Exp;
+  var estado = { rows: [], separacao: {}, operadores: [], capturedAt: null, busca: "" };
+
+  var metaInfo = document.getElementById("metaInfo");
+  var inputBusca = document.getElementById("inputBusca");
+  var listaOperadores = document.getElementById("listaOperadores");
+  var formOperador = document.getElementById("formOperador");
+  var inputOperador = document.getElementById("inputOperador");
+  var inputPin = document.getElementById("inputPin");
+  var inputTurno = document.getElementById("inputTurno");
+  var corpoResumoTurno1 = document.getElementById("corpoResumoTurno1");
+  var vazioResumoTurno1 = document.getElementById("vazioResumoTurno1");
+  var corpoResumoTurno2 = document.getElementById("corpoResumoTurno2");
+  var vazioResumoTurno2 = document.getElementById("vazioResumoTurno2");
+  var colResumoSemTurno = document.getElementById("colResumoSemTurno");
+  var corpoResumoSemTurno = document.getElementById("corpoResumoSemTurno");
+  var corpoPendentes = document.getElementById("corpoPendentes");
+  var corpoAtribuidas = document.getElementById("corpoAtribuidas");
+  var vazioPendentes = document.getElementById("vazioPendentes");
+  var vazioAtribuidas = document.getElementById("vazioAtribuidas");
+  var tituloPendentes = document.getElementById("tituloPendentes");
+  var tituloAtribuidas = document.getElementById("tituloAtribuidas");
+  var formAntecipado = document.getElementById("formAntecipado");
+  var inputPlacaAntecipada = document.getElementById("inputPlacaAntecipada");
+  var selOperadorAntecipado = document.getElementById("selOperadorAntecipado");
+  var avisoAntecipado = document.getElementById("avisoAntecipado");
+
+  function usaFirestore() {
+    return !!(E.Db && E.Db.temConfig());
+  }
+
+  function carregar() {
+    if (usaFirestore()) {
+      Promise.all([
+        E.Db.getDoc("estado", "hisowerRows"),
+        E.Db.getDoc("estado", "operadores"),
+        E.Db.listCollection("separacao")
+      ]).then(function (r) {
+        estado.rows = (r[0] && r[0].rows) || [];
+        estado.capturedAt = (r[0] && r[0].capturedAt) || null;
+        estado.operadores = (r[1] && r[1].lista) || [];
+        var mapa = {};
+        (r[2] || []).forEach(function (doc) {
+          if (doc.chaveOriginal) mapa[doc.chaveOriginal] = doc;
+        });
+        estado.separacao = mapa;
+        render();
+        if (E.AdminShell) E.AdminShell.atualizarBadgeComDados(estado.rows, estado.separacao);
+      }).catch(function (e) {
+        metaInfo.textContent = "Sem conexão com o banco — tente novamente em instantes.";
+      });
+    } else {
+      try {
+        var demo = JSON.parse(localStorage.getItem("exp_demo") || "{}");
+        estado.rows = demo.hisowerRows || [];
+        estado.separacao = demo.separacao || {};
+        estado.operadores = demo.operadores || [];
+        estado.capturedAt = demo.capturedAt || null;
+      } catch (e) { /* ignore */ }
+      render();
+      if (E.AdminShell) E.AdminShell.atualizarBadgeComDados(estado.rows, estado.separacao);
+    }
+  }
+
+  // Grava o array inteiro de operadores (substitui o documento).
+  function persistirOperadores(novaLista) {
+    estado.operadores = novaLista;
+    if (usaFirestore()) {
+      E.Db.setDoc("estado", "operadores", { lista: novaLista });
+    } else {
+      try {
+        var demo = JSON.parse(localStorage.getItem("exp_demo") || "{}");
+        demo.operadores = novaLista;
+        localStorage.setItem("exp_demo", JSON.stringify(demo));
+      } catch (e) { /* ignore */ }
+    }
+    render();
+  }
+
+  // Grava a separação de UMA carga (merge por doc).
+  // Monta o objeto plano pra gravar no Firestore sob a chave "chave" — ver
+  // extension/distribuicao.js pra explicação completa (evita que um
+  // "chaveOriginal" antigo, copiado de um objeto carregado sob outra
+  // chave, sobrescreva o valor correto).
+  function dadosParaFirestore(chave, dados) {
+    var limpo = Object.assign({}, dados);
+    delete limpo._id;
+    delete limpo.chaveOriginal;
+    limpo.chaveOriginal = chave;
+    return limpo;
+  }
+
+  function persistirSeparacaoCarga(chave, patch) {
+    var atual = estado.separacao[chave] || {};
+
+    // Reconciliação da separação antecipada — ver extension/distribuicao.js
+    // pra explicação completa: promove os campos do órfão "PEND:placa" pro
+    // documento da chave real, na primeira gravação sob ela.
+    var chaveOrfa = null;
+    if (Object.keys(atual).length === 0 && !E.ehChavePendente(chave)) {
+      var candidata = E.chavePendente(E.placaDaChave(chave));
+      if (estado.separacao[candidata]) {
+        atual = Object.assign({}, estado.separacao[candidata]);
+        chaveOrfa = candidata;
+      }
+    }
+
+    estado.separacao = Object.assign({}, estado.separacao);
+    estado.separacao[chave] = Object.assign({}, atual, patch);
+    if (chaveOrfa) delete estado.separacao[chaveOrfa];
+
+    if (usaFirestore()) {
+      var docId = E.Db.chaveParaDocId(chave);
+      E.Db.setDoc("separacao", docId, dadosParaFirestore(chave, estado.separacao[chave]), { merge: true });
+      if (chaveOrfa) {
+        E.Db.deleteDoc("separacao", E.Db.chaveParaDocId(chaveOrfa)).catch(function () { /* ignore */ });
+      }
+    } else {
+      try {
+        var demo = JSON.parse(localStorage.getItem("exp_demo") || "{}");
+        demo.separacao = estado.separacao;
+        localStorage.setItem("exp_demo", JSON.stringify(demo));
+      } catch (e) { /* ignore */ }
+    }
+    render();
+  }
+
+  // ---- Separação antecipada (carga sem "Entrou na Portaria" ainda) ----
+
+  function mascararPlaca(valor) {
+    var limpo = String(valor || "").toUpperCase().replace(/[^A-Z0-9]/g, "");
+    var letras = "", i = 0;
+    while (i < limpo.length && letras.length < 3) {
+      if (/[A-Z]/.test(limpo[i])) letras += limpo[i];
+      i++;
+    }
+    var resto = limpo.slice(i, i + 4);
+    return resto ? letras + "-" + resto : letras;
+  }
+
+  function adiantarSeparacao(placa, operador) {
+    placa = mascararPlaca(placa);
+    avisoAntecipado.hidden = true;
+    if (!placa || !operador) return;
+
+    var existeLinha = estado.rows.some(function (r) {
+      return !E.isFilled(r.entrouPortaria) && String(r.placa || "").trim().toUpperCase() === placa;
+    });
+    if (!existeLinha) {
+      avisoAntecipado.hidden = false;
+      avisoAntecipado.textContent = 'Ainda não existe nenhuma linha do Hisower para a placa "' + placa +
+        '" (pode ser que o caminhão ainda não tenha sido lançado lá). A carga já aparece nas listas abaixo só ' +
+        "com a placa — empresa, cliente e cultura completam assim que o Hisower lançar essa linha.";
+    }
+
+    atribuir(E.chavePendente(placa), operador);
+  }
+
+  function renderOpcoesAntecipado() {
+    var atual = selOperadorAntecipado.value;
+    selOperadorAntecipado.innerHTML = "";
+    var optVazia = document.createElement("option");
+    optVazia.value = "";
+    optVazia.textContent = "Operador…";
+    selOperadorAntecipado.appendChild(optVazia);
+    estado.operadores.forEach(function (o) {
+      var opt = document.createElement("option");
+      opt.value = o.nome;
+      opt.textContent = o.nome;
+      selOperadorAntecipado.appendChild(opt);
+    });
+    selOperadorAntecipado.value = atual;
+  }
+
+  // ---- Operadores (cadastro simples: nome + PIN de 4 dígitos) ----
+
+  function adicionarOperador(nome, pin, turno) {
+    nome = (nome || "").trim();
+    pin = (pin || "").trim();
+    if (!nome || !/^\d{4}$/.test(pin)) return;
+    var jaExiste = estado.operadores.some(function (o) { return o.nome.toLowerCase() === nome.toLowerCase(); });
+    if (jaExiste) return;
+    persistirOperadores(estado.operadores.concat([{ nome: nome, pin: pin, turno: turno || null }]));
+  }
+
+  function removerOperador(nome) {
+    persistirOperadores(estado.operadores.filter(function (o) { return o.nome !== nome; }));
+  }
+
+  // Clicar no selo de turno alterna 1 -> 2 -> (sem turno) -> 1.
+  function alternarTurno(nome) {
+    persistirOperadores(estado.operadores.map(function (o) {
+      if (o.nome !== nome) return o;
+      var proximo = o.turno === "1" || o.turno === 1 ? "2" : (o.turno === "2" || o.turno === 2 ? null : "1");
+      return Object.assign({}, o, { turno: proximo });
+    }));
+  }
+
+  function rotuloTurno(turno) {
+    if (turno === "1" || turno === 1) return "T1";
+    if (turno === "2" || turno === 2) return "T2";
+    return "sem turno";
+  }
+
+  function renderOperadores() {
+    listaOperadores.innerHTML = "";
+    estado.operadores.forEach(function (o) {
+      var chip = document.createElement("span");
+      chip.className = "chip-operador";
+      var texto = document.createTextNode(o.nome);
+      chip.appendChild(texto);
+
+      var selo = document.createElement("button");
+      selo.type = "button";
+      selo.className = "selo-turno" + (o.turno ? " selo-turno--" + o.turno : "");
+      selo.textContent = rotuloTurno(o.turno);
+      selo.title = "Clique para trocar o turno";
+      selo.addEventListener("click", function () { alternarTurno(o.nome); });
+      chip.appendChild(selo);
+
+      var btn = document.createElement("button");
+      btn.type = "button";
+      btn.textContent = "×";
+      btn.title = "Remover operador";
+      btn.addEventListener("click", function () { removerOperador(o.nome); });
+      chip.appendChild(btn);
+      listaOperadores.appendChild(chip);
+    });
+  }
+
+  // ---- Vínculo carga ↔ operador ----
+
+  function atribuir(chave, operador) {
+    persistirSeparacaoCarga(chave, { operador: operador });
+  }
+
+  function desvincular(chave) {
+    persistirSeparacaoCarga(chave, { operador: null });
+  }
+
+  // Grava o mapa de separação inteiro (local + Firestore) — usado por
+  // excluir/editar lançamento antecipado, que mexem na CHAVE (não dá pra
+  // reaproveitar persistirSeparacaoCarga, que só grava sob a chave atual).
+  function persistirMapaSeparacao(novo, chaveApagada) {
+    estado.separacao = novo;
+    if (usaChromeStorage()) {
+      chrome.storage.local.set({ separacao: novo });
+    } else {
+      try {
+        var demo = JSON.parse(localStorage.getItem("exp_demo") || "{}");
+        demo.separacao = novo;
+        localStorage.setItem("exp_demo", JSON.stringify(demo));
+      } catch (e) { /* ignore */ }
+    }
+    if (usaFirestore() && chaveApagada) {
+      E.Db.deleteDoc("separacao", E.Db.chaveParaDocId(chaveApagada))
+        .catch(function (e) { console.warn("Falha ao apagar lançamento antecipado:", e); });
+    }
+    render();
+  }
+
+  // Exclui de vez um lançamento de separação antecipada (a placa nunca foi
+  // lançada no Hisower, ou foi lançada errada). Só faz sentido pra chave
+  // "PEND:placa" — uma carga real (já com linha do Hisower) não se apaga
+  // por aqui, só desvincula o operador (botão "Remover").
+  function excluirAntecipada(chave) {
+    var placa = E.placaDaChave(chave);
+    if (!window.confirm('Excluir o lançamento antecipado da placa "' + placa + '"? Essa ação não pode ser desfeita.')) return;
+    var novo = Object.assign({}, estado.separacao);
+    delete novo[chave];
+    persistirMapaSeparacao(novo, chave);
+  }
+
+  // Corrige a placa de um lançamento antecipado (ex: erro de digitação),
+  // migrando os dados (operador, horários já registrados) da chave antiga
+  // "PEND:placaErrada" pra "PEND:placaCerta".
+  function editarPlacaAntecipada(chave) {
+    var placaAtual = E.placaDaChave(chave);
+    var entrada = window.prompt("Corrigir placa do lançamento antecipado:", placaAtual);
+    if (entrada == null) return;
+    var novaPlaca = mascararPlaca(entrada);
+    if (!novaPlaca || novaPlaca === placaAtual) return;
+
+    var novaChave = E.chavePendente(novaPlaca);
+    if (estado.separacao[novaChave]) {
+      window.alert('Já existe um lançamento antecipado para a placa "' + novaPlaca + '".');
+      return;
+    }
+
+    var novo = Object.assign({}, estado.separacao);
+    novo[novaChave] = novo[chave];
+    delete novo[chave];
+    persistirMapaSeparacao(novo, chave);
+
+    if (usaFirestore()) {
+      E.Db.setDoc("separacao", E.Db.chaveParaDocId(novaChave), dadosParaFirestore(novaChave, novo[novaChave]), { merge: true })
+        .catch(function (e) { console.warn("Falha ao gravar novo lançamento antecipado:", e); });
+    }
+  }
+
+  // Botões extras (Editar placa / Excluir) que só aparecem em lançamentos
+  // antecipados — cargas reais do Hisower não têm essas ações.
+  function botoesAntecipado(chave) {
+    var wrap = document.createElement("span");
+    wrap.style.marginLeft = "8px";
+
+    var btnEditar = document.createElement("button");
+    btnEditar.type = "button";
+    btnEditar.className = "btn-editar";
+    btnEditar.textContent = "Editar placa";
+    btnEditar.title = "Corrigir a placa deste lançamento antecipado";
+    btnEditar.addEventListener("click", function () { editarPlacaAntecipada(chave); });
+    wrap.appendChild(btnEditar);
+
+    var btnExcluir = document.createElement("button");
+    btnExcluir.type = "button";
+    btnExcluir.className = "btn-remover";
+    btnExcluir.style.marginLeft = "6px";
+    btnExcluir.textContent = "Excluir";
+    btnExcluir.title = "Excluir este lançamento antecipado";
+    btnExcluir.addEventListener("click", function () { excluirAntecipada(chave); });
+    wrap.appendChild(btnExcluir);
+
+    return wrap;
+  }
+
+  function selecionarOperador(chave, onEscolher) {
+    var sel = document.createElement("select");
+    sel.className = "sel-operador";
+    var optVazia = document.createElement("option");
+    optVazia.value = "";
+    optVazia.textContent = "Selecionar…";
+    sel.appendChild(optVazia);
+    estado.operadores.forEach(function (o) {
+      var opt = document.createElement("option");
+      opt.value = o.nome;
+      opt.textContent = o.nome;
+      sel.appendChild(opt);
+    });
+    sel.addEventListener("change", function () {
+      if (sel.value) onEscolher(sel.value);
+    });
+    return sel;
+  }
+
+  function render() {
+    renderOperadores();
+    renderOpcoesAntecipado();
+
+    var agora = Date.now();
+    var cargas = E.agregar(estado.rows, estado.separacao).map(function (c) {
+      c._c = E.computar(c, agora);
+      return c;
+    }).filter(function (c) {
+      return c._c.status === E.STATUS.AGUARDANDO_SEPARACAO;
+    }).filter(function (c) {
+      var termo = estado.busca.trim().toLowerCase();
+      if (!termo) return true;
+      var alvo = [c.progWeb, c.placa, c.empresa, c.cliente].join(" ").toLowerCase();
+      return alvo.indexOf(termo) !== -1;
+    }).sort(function (a, b) {
+      var ta = a._flags.ordemMontadaTs ? a._flags.ordemMontadaTs.getTime() : 0;
+      var tb = b._flags.ordemMontadaTs ? b._flags.ordemMontadaTs.getTime() : 0;
+      return ta - tb;
+    });
+
+    var pendentes = cargas.filter(function (c) { return !c.operador; });
+    var atribuidas = cargas.filter(function (c) { return !!c.operador; });
+
+    renderResumoOperador(atribuidas);
+
+    tituloPendentes.textContent = "Aguardando atribuição (" + pendentes.length + ")";
+    tituloAtribuidas.textContent = "Já atribuídas (" + atribuidas.length + ")";
+
+    corpoPendentes.innerHTML = "";
+    vazioPendentes.hidden = pendentes.length > 0;
+    pendentes.forEach(function (c) { corpoPendentes.appendChild(linhaPendente(c)); });
+
+    corpoAtribuidas.innerHTML = "";
+    vazioAtribuidas.hidden = atribuidas.length > 0;
+    atribuidas.forEach(function (c) { corpoAtribuidas.appendChild(linhaAtribuida(c)); });
+
+    metaInfo.textContent = cargas.length + " em Aguardando Separação" +
+      (estado.capturedAt ? " · atualizado " + new Date(estado.capturedAt).toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" }) : "");
+  }
+
+  function renderResumoOperador(atribuidas) {
+    var contagem = {};
+    atribuidas.forEach(function (c) { contagem[c.operador] = (contagem[c.operador] || 0) + 1; });
+
+    var doTurno1 = [], doTurno2 = [], semTurno = [];
+    estado.operadores.forEach(function (o) {
+      var item = { nome: o.nome, total: contagem[o.nome] || 0 };
+      if (o.turno === "1" || o.turno === 1) doTurno1.push(item);
+      else if (o.turno === "2" || o.turno === 2) doTurno2.push(item);
+      else semTurno.push(item);
+    });
+    [doTurno1, doTurno2, semTurno].forEach(function (lista) {
+      lista.sort(function (a, b) { return b.total - a.total; });
+    });
+
+    preencherTabelaResumo(corpoResumoTurno1, vazioResumoTurno1, doTurno1);
+    preencherTabelaResumo(corpoResumoTurno2, vazioResumoTurno2, doTurno2);
+    colResumoSemTurno.hidden = semTurno.length === 0;
+    if (semTurno.length) preencherTabelaResumo(corpoResumoSemTurno, null, semTurno);
+  }
+
+  function preencherTabelaResumo(corpo, vazio, lista) {
+    if (vazio) vazio.hidden = lista.length > 0;
+    corpo.innerHTML = "";
+    lista.forEach(function (op) {
+      var tr = document.createElement("tr");
+      tr.innerHTML = "<td>" + esc(op.nome) + "</td>" + '<td class="num">' + (op.total || "") + "</td>";
+      corpo.appendChild(tr);
+    });
+    if (lista.length) {
+      var totalGeral = lista.reduce(function (acc, op) { return acc + op.total; }, 0);
+      var trTotal = document.createElement("tr");
+      trTotal.className = "total-row";
+      trTotal.innerHTML = "<td>Total</td>" + '<td class="num">' + (totalGeral || "") + "</td>";
+      corpo.appendChild(trTotal);
+    }
+  }
+
+  function linhaBase(c) {
+    var tr = document.createElement("tr");
+    tr.appendChild(td('<span class="carga-web">' + esc(c.progWeb) + "</span>"));
+    tr.appendChild(td('<span class="placa">' + esc(c.placa) + "</span>"));
+    var empClass = "empresa-tag" +
+      (c.empresa === "Basf" ? " empresa-basf" : c.empresa === "Multiplicação" ? " empresa-multiplicacao" : "");
+    tr.appendChild(td('<span class="' + empClass + '">' + esc(c.empresa) + "</span>"));
+    tr.appendChild(td(esc(c.cliente)));
+    return tr;
+  }
+
+  function linhaPendente(c) {
+    var tr = linhaBase(c);
+    tr.appendChild(td(esc(c._flags.ordemMontadaTs ? fmtDataHora(c._flags.ordemMontadaTs) : "—")));
+
+    var tdAcao = document.createElement("td");
+    if (estado.operadores.length === 0) {
+      tdAcao.innerHTML = '<span class="aviso-inline">cadastre um operador acima</span>';
+    } else {
+      tdAcao.appendChild(selecionarOperador(c.chave, function (nome) { atribuir(c.chave, nome); }));
+    }
+    if (E.ehChavePendente(c.chave)) tdAcao.appendChild(botoesAntecipado(c.chave));
+    tr.appendChild(tdAcao);
+    return tr;
+  }
+
+  function linhaAtribuida(c) {
+    var tr = linhaBase(c);
+    tr.appendChild(td('<span class="placa">' + esc(c.operador) + "</span>"));
+
+    var tdAcao = document.createElement("td");
+    var sel = selecionarOperador(c.chave, function (nome) { atribuir(c.chave, nome); });
+    sel.title = "Trocar operador";
+    tdAcao.appendChild(sel);
+
+    var btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "btn-remover";
+    btn.textContent = "Remover";
+    btn.style.marginLeft = "8px";
+    btn.addEventListener("click", function () { desvincular(c.chave); });
+    tdAcao.appendChild(btn);
+
+    if (E.ehChavePendente(c.chave)) tdAcao.appendChild(botoesAntecipado(c.chave));
+
+    tr.appendChild(tdAcao);
+    return tr;
+  }
+
+  function td(html) { var e = document.createElement("td"); e.innerHTML = html; return e; }
+  function esc(s) {
+    return String(s == null ? "" : s)
+      .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  }
+  function fmtDataHora(d) {
+    return String(d.getDate()).padStart(2, "0") + "/" + String(d.getMonth() + 1).padStart(2, "0") + "/" + d.getFullYear() +
+      " " + String(d.getHours()).padStart(2, "0") + ":" + String(d.getMinutes()).padStart(2, "0");
+  }
+
+  inputBusca.addEventListener("input", function () {
+    estado.busca = inputBusca.value;
+    render();
+  });
+
+  formOperador.addEventListener("submit", function (e) {
+    e.preventDefault();
+    adicionarOperador(inputOperador.value, inputPin.value, inputTurno.value);
+    inputOperador.value = "";
+    inputPin.value = "";
+    inputTurno.value = "";
+    inputOperador.focus();
+  });
+
+  inputPlacaAntecipada.addEventListener("input", function () {
+    inputPlacaAntecipada.value = mascararPlaca(inputPlacaAntecipada.value);
+  });
+
+  formAntecipado.addEventListener("submit", function (e) {
+    e.preventDefault();
+    adiantarSeparacao(inputPlacaAntecipada.value, selOperadorAntecipado.value);
+    inputPlacaAntecipada.value = "";
+    selOperadorAntecipado.value = "";
+  });
+
+  var intervalId = null;
+  function ativar() { carregar(); intervalId = setInterval(carregar, 30000); }
+  function desativar() { if (intervalId) { clearInterval(intervalId); intervalId = null; } }
+  window.Exp.AdminViews = window.Exp.AdminViews || {};
+  window.Exp.AdminViews.distribuicao = { ativar: ativar, desativar: desativar };
+})();
+</script>
+
+<script>
+/* ==================== resumo.js (adaptado: Firestore em vez de chrome.storage, IDs com prefixo rsm) ==================== */
+(function () {
+  "use strict";
+
+  var E = window.Exp;
+  window.Exp.AdminViews = window.Exp.AdminViews || {};
+  var DIAS_PARA_TRAS = 10;
+
+  var corpoStatus = document.getElementById("rsmCorpoStatus");
+  var theadDiaria = document.getElementById("rsmTheadDiaria");
+  var corpoDiaria = document.getElementById("rsmCorpoDiaria");
+  var captura = document.getElementById("rsmCaptura");
+
+  function usaFirestore() {
+    return !!(E.Db && E.Db.temConfig());
+  }
+
+  function carregar() {
+    if (usaFirestore()) {
+      Promise.all([
+        E.Db.getDoc("estado", "hisowerRows"),
+        E.Db.listCollection("separacao")
+      ]).then(function (r) {
+        var rows = (r[0] && r[0].rows) || [];
+        var mapa = {};
+        (r[1] || []).forEach(function (doc) { if (doc.chaveOriginal) mapa[doc.chaveOriginal] = doc; });
+        render(rows, mapa, (r[0] && r[0].capturedAt) || null);
+        if (E.AdminShell) E.AdminShell.atualizarBadgeComDados(rows, mapa);
+      }).catch(carregarDemo);
+    } else {
+      carregarDemo();
+    }
+  }
+
+  function carregarDemo() {
+    var demo = {};
+    try { demo = JSON.parse(localStorage.getItem("exp_demo") || "{}"); } catch (e) { /* ignore */ }
+    render(demo.hisowerRows || [], demo.separacao || {}, demo.capturedAt || null);
+    if (E.AdminShell) E.AdminShell.atualizarBadgeComDados(demo.hisowerRows || [], demo.separacao || {});
+  }
+
+  function render(rows, separacao, capturedAt) {
+    var agora = Date.now();
+    var hoje = new Date(agora);
+    var cargas = E.agregar(rows, separacao).map(function (c) {
+      c._c = E.computar(c, agora);
+      return c;
+    });
+
+    renderStatus(cargas, hoje);
+    renderDiaria(cargas, hoje);
+
+    captura.textContent = capturedAt
+      ? "capturado " + new Date(capturedAt).toLocaleString("pt-BR")
+      : "sem captura";
+  }
+
+  function renderStatus(cargas, hoje) {
+    var visiveis = cargas.filter(function (c) {
+      if (c._c.status !== E.STATUS.CARREGADO) return true;
+      return E.mesmoDia(c._c.desde, hoje);
+    });
+    var contagem = {};
+    E.STATUS_META.forEach(function (m) { contagem[m.key] = 0; });
+    visiveis.forEach(function (c) { contagem[c._c.status] = (contagem[c._c.status] || 0) + 1; });
+
+    corpoStatus.innerHTML = "";
+    E.STATUS_META.forEach(function (m) {
+      var tr = document.createElement("tr");
+      tr.innerHTML =
+        "<td><span class=\"status-dot\" style=\"background:" + m.color + "\"></span>" + esc(m.key) + "</td>" +
+        "<td class=\"num\">" + fmtNum(contagem[m.key] || 0) + "</td>";
+      corpoStatus.appendChild(tr);
+    });
+    var trTotal = document.createElement("tr");
+    trTotal.className = "total-row";
+    trTotal.innerHTML = "<td>Total</td><td class=\"num\">" + fmtNum(visiveis.length) + "</td>";
+    corpoStatus.appendChild(trTotal);
+  }
+
+  function renderDiaria(cargas, hoje) {
+    var m = E.matrizDiaria(cargas, DIAS_PARA_TRAS, hoje);
+
+    theadDiaria.innerHTML =
+      "<tr><th rowspan=\"2\">Empresa</th><th class=\"th-titulo\" colspan=\"" + m.dias.length + "\">Total de carregamentos diários</th></tr>" +
+      "<tr>" + m.dias.map(function (d) { return "<th>" + esc(d.label) + "</th>"; }).join("") + "</tr>";
+
+    corpoDiaria.innerHTML = "";
+    m.empresas.forEach(function (emp) {
+      var tr = document.createElement("tr");
+      var cells = "<td style=\"text-align:left\">" + esc(emp) + "</td>" +
+        m.dias.map(function (d) { return "<td>" + fmtNum(m.matriz[emp][d.key]) + "</td>"; }).join("");
+      tr.innerHTML = cells;
+      corpoDiaria.appendChild(tr);
+    });
+
+    var trTotal = document.createElement("tr");
+    trTotal.className = "total-row";
+    trTotal.innerHTML = "<td style=\"text-align:left\">Total</td>" +
+      m.dias.map(function (d) { return "<td>" + fmtNum(m.totais[d.key]) + "</td>"; }).join("");
+    corpoDiaria.appendChild(trTotal);
+  }
+
+  function fmtNum(n) {
+    return n ? String(n) : "";
+  }
+
+  function esc(s) {
+    return String(s == null ? "" : s)
+      .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  }
+
+  var intervalId = null;
+  function ativar() { carregar(); intervalId = setInterval(carregar, 30000); }
+  function desativar() { if (intervalId) { clearInterval(intervalId); intervalId = null; } }
+  window.Exp.AdminViews.resumo = { ativar: ativar, desativar: desativar };
+})();
+</script>
+
+<script>
+/* ==================== desempenho.js (adaptado: Firestore em vez de chrome.storage, IDs com prefixo dsp) ==================== */
+(function () {
+  "use strict";
+
+  var E = window.Exp;
+  window.Exp.AdminViews = window.Exp.AdminViews || {};
+  var DIAS_PARA_TRAS = 29; // 30 dias incluindo hoje.
+
+  var kpiTotal = document.getElementById("dspKpiTotal");
+  var kpiTempoMedio = document.getElementById("dspKpiTempoMedio");
+  var kpiDestaque = document.getElementById("dspKpiDestaque");
+  var kpiDestaqueSub = document.getElementById("dspKpiDestaqueSub");
+
+  var filtroTurno = document.getElementById("dspFiltroTurno");
+  var corpoResumoOperador = document.getElementById("dspCorpoResumoOperador");
+  var vazioResumoOperador = document.getElementById("dspVazioResumoOperador");
+
+  var chartRanking = document.getElementById("dspChartRanking");
+  var corpoRanking = document.getElementById("dspCorpoRanking");
+  var vazioRanking = document.getElementById("dspVazioRanking");
+
+  var chartMediaDia = document.getElementById("dspChartMediaDia");
+  var corpoMediaDia = document.getElementById("dspCorpoMediaDia");
+  var vazioMediaDia = document.getElementById("dspVazioMediaDia");
+
+  var chartTempoOperador = document.getElementById("dspChartTempoOperador");
+  var corpoTempoOperador = document.getElementById("dspCorpoTempoOperador");
+  var vazioTempoOperador = document.getElementById("dspVazioTempoOperador");
+
+  var chartTurnoDiario = document.getElementById("dspChartTurnoDiario");
+  var theadTurnoDiaria = document.getElementById("dspTheadTurnoDiaria");
+  var corpoTurnoDiaria = document.getElementById("dspCorpoTurnoDiaria");
+  var vazioTurnoDiario = document.getElementById("dspVazioTurnoDiario");
+
+  var chartTempoTurno = document.getElementById("dspChartTempoTurno");
+  var corpoTempoTurno = document.getElementById("dspCorpoTempoTurno");
+  var vazioTempoTurno = document.getElementById("dspVazioTempoTurno");
+
+  var captura = document.getElementById("dspCaptura");
+
+  var estadoTurno = "todos";
+  var ultimoD = null;
+
+  function usaFirestore() {
+    return !!(E.Db && E.Db.temConfig());
+  }
+
+  function carregar() {
+    if (usaFirestore()) {
+      Promise.all([
+        E.Db.getDoc("estado", "hisowerRows"),
+        E.Db.getDoc("estado", "operadores"),
+        E.Db.listCollection("separacao")
+      ]).then(function (r) {
+        var rows = (r[0] && r[0].rows) || [];
+        var mapa = {};
+        (r[2] || []).forEach(function (doc) { if (doc.chaveOriginal) mapa[doc.chaveOriginal] = doc; });
+        render(rows, mapa, (r[1] && r[1].lista) || [], (r[0] && r[0].capturedAt) || null);
+        if (E.AdminShell) E.AdminShell.atualizarBadgeComDados(rows, mapa);
+      }).catch(carregarDemo);
+    } else {
+      carregarDemo();
+    }
+  }
+
+  function carregarDemo() {
+    var demo = {};
+    try { demo = JSON.parse(localStorage.getItem("exp_demo") || "{}"); } catch (e) { /* ignore */ }
+    render(demo.hisowerRows || [], demo.separacao || {}, demo.operadores || [], demo.capturedAt || null);
+    if (E.AdminShell) E.AdminShell.atualizarBadgeComDados(demo.hisowerRows || [], demo.separacao || {});
+  }
+
+  function render(rows, separacao, operadoresRoster, capturedAt) {
+    var agora = Date.now();
+    var hoje = new Date(agora);
+    var cargas = E.agregar(rows, separacao).map(function (c) {
+      c._c = E.computar(c, agora);
+      return c;
+    });
+
+    ultimoD = E.desempenhoOperadores(cargas, DIAS_PARA_TRAS, hoje, operadoresRoster);
+
+    renderKpis(ultimoD.operadores);
+    renderResumoOperador();
+    renderRankingChart(ultimoD.operadores);
+    renderMediaDiaChart(ultimoD.operadores);
+    renderTempoOperadorChart(ultimoD.operadores);
+    renderTurnoDiarioChart(ultimoD);
+    renderTempoTurnoChart(ultimoD.turnos);
+
+    captura.textContent = capturedAt
+      ? "capturado " + new Date(capturedAt).toLocaleString("pt-BR")
+      : "sem captura";
+  }
+
+  function renderKpis(operadores) {
+    var totalGeral = operadores.reduce(function (acc, op) { return acc + op.total; }, 0);
+    var somaMsGeral = operadores.reduce(function (acc, op) { return acc + (op.tempoMedioMs || 0) * op.total; }, 0);
+
+    kpiTotal.textContent = totalGeral;
+    kpiTempoMedio.textContent = totalGeral ? E.fmtDur(somaMsGeral / totalGeral) : "—";
+
+    if (operadores.length) {
+      kpiDestaque.textContent = operadores[0].nome;
+      kpiDestaqueSub.textContent = operadores[0].total + " carga(s) separada(s)";
+    } else {
+      kpiDestaque.textContent = "—";
+      kpiDestaqueSub.textContent = "sem dados no período";
+    }
+  }
+
+  function renderResumoOperador() {
+    if (!ultimoD) return;
+    var operadores = ultimoD.operadores.filter(function (op) {
+      return estadoTurno === "todos" || String(op.turnoCadastrado) === estadoTurno;
+    });
+    vazioResumoOperador.hidden = operadores.length > 0;
+
+    var lista = operadores.slice().sort(function (a, b) {
+      var ta = a.turnoCadastrado ? String(a.turnoCadastrado) : "9";
+      var tb = b.turnoCadastrado ? String(b.turnoCadastrado) : "9";
+      if (ta !== tb) return ta < tb ? -1 : 1;
+      return b.total - a.total;
+    });
+
+    corpoResumoOperador.innerHTML = "";
+    var turnoAnterior = null;
+    lista.forEach(function (op) {
+      var turnoAtual = op.turnoCadastrado || null;
+      var tr = document.createElement("tr");
+      var mesmoGrupo = estadoTurno === "todos" && turnoAnterior === turnoAtual;
+      tr.innerHTML =
+        "<td>" + (mesmoGrupo ? "" : rotuloTurnoBadge(turnoAtual)) + "</td>" +
+        "<td>" + esc(op.nome) + "</td>" +
+        '<td class="num">' + op.total + "</td>";
+      corpoResumoOperador.appendChild(tr);
+      turnoAnterior = turnoAtual;
+    });
+
+    if (lista.length) {
+      var totalGeral = lista.reduce(function (acc, op) { return acc + op.total; }, 0);
+      var trTotal = document.createElement("tr");
+      trTotal.className = "total-row";
+      trTotal.innerHTML = "<td></td><td>Total</td>" + '<td class="num">' + totalGeral + "</td>";
+      corpoResumoOperador.appendChild(trTotal);
+    }
+  }
+
+  function renderRankingChart(operadores) {
+    vazioRanking.hidden = operadores.length > 0;
+    chartRanking.innerHTML = operadores.length ? svgBarrasHorizontais(operadores.map(function (op) {
+      return { rotulo: op.nome, valor: op.total };
+    }), "Cargas separadas por operador") : "";
+
+    corpoRanking.innerHTML = "";
+    operadores.forEach(function (op) {
+      var tr = document.createElement("tr");
+      tr.innerHTML =
+        "<td>" + esc(op.nome) + "</td>" +
+        "<td>" + rotuloTurnoBadge(op.turnoCadastrado) + "</td>" +
+        '<td class="num">' + op.total + "</td>" +
+        '<td class="num">' + E.fmtDur(op.tempoMedioMs) + "</td>";
+      corpoRanking.appendChild(tr);
+    });
+  }
+
+  function renderMediaDiaChart(operadores) {
+    var comMedia = operadores.filter(function (op) { return op.mediaPorDia != null; })
+      .slice().sort(function (a, b) { return b.mediaPorDia - a.mediaPorDia; });
+
+    vazioMediaDia.hidden = comMedia.length > 0;
+    chartMediaDia.innerHTML = comMedia.length ? svgBarrasHorizontais(comMedia.map(function (op) {
+      return { rotulo: op.nome, valor: Math.round(op.mediaPorDia * 10) / 10 };
+    }), "Média de cargas separadas por dia trabalhado") : "";
+
+    corpoMediaDia.innerHTML = "";
+    comMedia.forEach(function (op) {
+      var tr = document.createElement("tr");
+      tr.innerHTML =
+        "<td>" + esc(op.nome) + "</td>" +
+        '<td class="num">' + (Math.round(op.mediaPorDia * 10) / 10) + "</td>" +
+        '<td class="num">' + op.diasTrabalhados + "</td>";
+      corpoMediaDia.appendChild(tr);
+    });
+  }
+
+  // Gráfico igual ao original; a tabela "ver como tabela" abaixo dele é um
+  // extra além da paridade estrita com o desktop (lá esse gráfico não tem
+  // fallback em tabela) — adicionada porque ajuda a leitura no celular.
+  function renderTempoOperadorChart(operadores) {
+    var comTempo = operadores.filter(function (op) { return op.tempoMedioMs != null; })
+      .slice().sort(function (a, b) { return b.tempoMedioMs - a.tempoMedioMs; });
+
+    vazioTempoOperador.hidden = comTempo.length > 0;
+    chartTempoOperador.innerHTML = comTempo.length ? svgBarrasHorizontaisDuracao(comTempo.map(function (op) {
+      return { rotulo: op.nome, valorMs: op.tempoMedioMs };
+    }), "Tempo médio de separação por operador") : "";
+
+    corpoTempoOperador.innerHTML = "";
+    comTempo.forEach(function (op) {
+      var tr = document.createElement("tr");
+      tr.innerHTML = "<td>" + esc(op.nome) + "</td>" + '<td class="num">' + E.fmtDur(op.tempoMedioMs) + "</td>";
+      corpoTempoOperador.appendChild(tr);
+    });
+  }
+
+  function renderTurnoDiarioChart(d) {
+    var totalGeral = d.turnos.reduce(function (acc, t) { return acc + t.total; }, 0);
+    vazioTurnoDiario.hidden = totalGeral > 0;
+
+    chartTurnoDiario.innerHTML = totalGeral ? svgColunasAgrupadas(d.dias, [
+      { rotulo: "Turno 1", cor: "var(--turno1)", valores: d.dias.map(function (dd) { return d.turnos[0].porDia[dd.key]; }) },
+      { rotulo: "Turno 2", cor: "var(--turno2)", valores: d.dias.map(function (dd) { return d.turnos[1].porDia[dd.key]; }) }
+    ]) : "";
+
+    if (!totalGeral) {
+      theadTurnoDiaria.innerHTML = "";
+      corpoTurnoDiaria.innerHTML = "";
+      return;
+    }
+
+    theadTurnoDiaria.innerHTML =
+      '<tr><th rowspan="2">Turno</th><th class="th-titulo" colspan="' + d.dias.length + '">Separações por dia</th></tr>' +
+      "<tr>" + d.dias.map(function (dd) { return "<th>" + esc(dd.label) + "</th>"; }).join("") + "</tr>";
+
+    corpoTurnoDiaria.innerHTML = "";
+    d.turnos.forEach(function (t) {
+      var tr = document.createElement("tr");
+      tr.innerHTML = '<td style="text-align:left">' + esc(t.label) + "</td>" +
+        d.dias.map(function (dd) { return "<td>" + fmtNum(t.porDia[dd.key]) + "</td>"; }).join("");
+      corpoTurnoDiaria.appendChild(tr);
+    });
+    var totalRow = document.createElement("tr");
+    totalRow.className = "total-row";
+    totalRow.innerHTML = '<td style="text-align:left">Total</td>' +
+      d.dias.map(function (dd) {
+        var soma = d.turnos.reduce(function (acc, t) { return acc + t.porDia[dd.key]; }, 0);
+        return "<td>" + fmtNum(soma) + "</td>";
+      }).join("");
+    corpoTurnoDiaria.appendChild(totalRow);
+  }
+
+  // Mesmo extra de "ver como tabela" comentado acima, aplicado aqui também.
+  function renderTempoTurnoChart(turnos) {
+    var comTempo = turnos.filter(function (t) { return t.tempoMedioMs != null; });
+    vazioTempoTurno.hidden = comTempo.length > 0;
+    chartTempoTurno.innerHTML = comTempo.length ? svgBarrasHorizontaisDuracao(comTempo.map(function (t) {
+      return { rotulo: t.label, valorMs: t.tempoMedioMs, cor: t.turno === 1 ? "var(--turno1)" : "var(--turno2)" };
+    }), "Tempo médio de separação por turno") : "";
+
+    corpoTempoTurno.innerHTML = "";
+    comTempo.forEach(function (t) {
+      var tr = document.createElement("tr");
+      tr.innerHTML = "<td>" + esc(t.label) + "</td>" + '<td class="num">' + E.fmtDur(t.tempoMedioMs) + "</td>";
+      corpoTempoTurno.appendChild(tr);
+    });
+  }
+
+  function svgBarrasHorizontais(linhas, rotuloAria) {
+    var largura = 600, altPorLinha = 34, altBarra = 20, padEsq = 130, padDir = 46, padTopo = 10;
+    var altura = padTopo * 2 + linhas.length * altPorLinha;
+    var maxVal = Math.max.apply(null, linhas.map(function (l) { return l.valor; }).concat([1]));
+    var maxEscala = arredondarTeto(maxVal);
+    var largPlot = largura - padEsq - padDir;
+    var escala = largPlot / maxEscala;
+
+    var grade = "";
+    var passos = 4;
+    for (var i = 0; i <= passos; i++) {
+      var v = Math.round((maxEscala * i) / passos);
+      var x = padEsq + v * escala;
+      grade += '<line x1="' + x + '" y1="' + padTopo + '" x2="' + x + '" y2="' + (altura - padTopo) + '" stroke="var(--grid)" stroke-width="1"/>';
+      grade += '<text x="' + x + '" y="' + (altura - 2) + '" font-size="10" fill="var(--muted)" text-anchor="middle">' + v + "</text>";
+    }
+
+    var barras = linhas.map(function (l, i) {
+      var y = padTopo + i * altPorLinha + (altPorLinha - altBarra) / 2;
+      var w = Math.max(2, l.valor * escala);
+      var cor = l.cor || "var(--bar)";
+      return (
+        '<text x="' + (padEsq - 10) + '" y="' + (y + altBarra / 2 + 4) + '" font-size="12" fill="var(--ink)" text-anchor="end">' + esc(l.rotulo) + "</text>" +
+        '<rect x="' + padEsq + '" y="' + y + '" width="' + w + '" height="' + altBarra + '" rx="4" fill="' + cor + '"><title>' + esc(l.rotulo) + ": " + l.valor + "</title></rect>" +
+        '<text x="' + (padEsq + w + 8) + '" y="' + (y + altBarra / 2 + 4) + '" font-size="12" font-weight="700" fill="var(--ink)">' + l.valor + "</text>"
+      );
+    }).join("");
+
+    return '<svg viewBox="0 0 ' + largura + " " + (altura + 14) + '" width="100%" role="img" aria-label="' + esc(rotuloAria) + '">' +
+      grade + barras + "</svg>";
+  }
+
+  function svgBarrasHorizontaisDuracao(linhas, rotuloAria) {
+    var largura = 600, altPorLinha = 34, altBarra = 20, padEsq = 130, padDir = 70, padTopo = 10;
+    var altura = padTopo * 2 + linhas.length * altPorLinha;
+    var minMax = Math.max.apply(null, linhas.map(function (l) { return Math.round(l.valorMs / 60000); }).concat([1]));
+    var escalaMax = arredondarTeto(minMax);
+    var largPlot = largura - padEsq - padDir;
+    var escala = largPlot / escalaMax;
+
+    var grade = "";
+    var passos = 4;
+    for (var i = 0; i <= passos; i++) {
+      var v = Math.round((escalaMax * i) / passos);
+      var x = padEsq + v * escala;
+      grade += '<line x1="' + x + '" y1="' + padTopo + '" x2="' + x + '" y2="' + (altura - padTopo) + '" stroke="var(--grid)" stroke-width="1"/>';
+      grade += '<text x="' + x + '" y="' + (altura - 2) + '" font-size="10" fill="var(--muted)" text-anchor="middle">' + v + "min</text>";
+    }
+
+    var barras = linhas.map(function (l, i) {
+      var y = padTopo + i * altPorLinha + (altPorLinha - altBarra) / 2;
+      var min = l.valorMs / 60000;
+      var w = Math.max(2, min * escala);
+      var cor = l.cor || "var(--bar)";
+      return (
+        '<text x="' + (padEsq - 10) + '" y="' + (y + altBarra / 2 + 4) + '" font-size="12" fill="var(--ink)" text-anchor="end">' + esc(l.rotulo) + "</text>" +
+        '<rect x="' + padEsq + '" y="' + y + '" width="' + w + '" height="' + altBarra + '" rx="4" fill="' + cor + '"><title>' + esc(l.rotulo) + ": " + E.fmtDur(l.valorMs) + "</title></rect>" +
+        '<text x="' + (padEsq + w + 8) + '" y="' + (y + altBarra / 2 + 4) + '" font-size="12" font-weight="700" fill="var(--ink)">' + E.fmtDur(l.valorMs) + "</text>"
+      );
+    }).join("");
+
+    return '<svg viewBox="0 0 ' + largura + " " + (altura + 14) + '" width="100%" role="img" aria-label="' + esc(rotuloAria) + '">' +
+      grade + barras + "</svg>";
+  }
+
+  function svgColunasAgrupadas(dias, series) {
+    var altura = 220, padEsq = 34, padDir = 10, padTopo = 10, padBase = 34;
+    var largGrupo = 22, gapGrupo = 10;
+    var largBarra = (largGrupo - 2) / series.length;
+    var largura = padEsq + padDir + dias.length * (largGrupo + gapGrupo);
+    var maxVal = Math.max.apply(null, series.reduce(function (acc, s) { return acc.concat(s.valores); }, []).concat([1]));
+    var maxEscala = arredondarTeto(maxVal);
+    var altPlot = altura - padTopo - padBase;
+    var escala = altPlot / maxEscala;
+
+    var grade = "";
+    var passos = 4;
+    for (var i = 0; i <= passos; i++) {
+      var v = Math.round((maxEscala * i) / passos);
+      var y = altura - padBase - v * escala;
+      grade += '<line x1="' + padEsq + '" y1="' + y + '" x2="' + (largura - padDir) + '" y2="' + y + '" stroke="var(--grid)" stroke-width="1"/>';
+      grade += '<text x="' + (padEsq - 6) + '" y="' + (y + 3) + '" font-size="9" fill="var(--muted)" text-anchor="end">' + v + "</text>";
+    }
+
+    var passoRotulo = Math.ceil(dias.length / 8);
+
+    var barras = dias.map(function (dd, i) {
+      var xGrupo = padEsq + i * (largGrupo + gapGrupo);
+      var mostraRotulo = i % passoRotulo === 0 || i === dias.length - 1;
+      var marcas = series.map(function (s, si) {
+        var val = s.valores[i];
+        var h = Math.max(val > 0 ? 1 : 0, val * escala);
+        var x = xGrupo + si * largBarra;
+        var y = altura - padBase - h;
+        return '<rect x="' + x + '" y="' + y + '" width="' + (largBarra - 1) + '" height="' + h + '" rx="2" fill="' + s.cor + '"><title>' + esc(s.rotulo) + " — " + esc(dd.label) + ": " + val + "</title></rect>";
+      }).join("");
+      return marcas +
+        (mostraRotulo ? '<text x="' + (xGrupo + largGrupo / 2) + '" y="' + (altura - padBase + 14) + '" font-size="9" fill="var(--muted)" text-anchor="middle">' + esc(dd.label) + "</text>" : "");
+    }).join("");
+
+    return '<svg viewBox="0 0 ' + largura + " " + altura + '" width="100%" role="img" aria-label="Separações por dia, por turno">' +
+      grade + barras + "</svg>";
+  }
+
+  function arredondarTeto(v) {
+    if (v <= 0) return 1;
+    var exp = Math.floor(Math.log10(v));
+    var base = Math.pow(10, exp);
+    var norm = v / base;
+    var niceNorm = norm <= 1 ? 1 : norm <= 2 ? 2 : norm <= 5 ? 5 : 10;
+    return niceNorm * base;
+  }
+
+  function rotuloTurnoBadge(turno) {
+    if (turno === "1" || turno === 1) return '<span class="selo-turno selo-turno--1">T1</span>';
+    if (turno === "2" || turno === 2) return '<span class="selo-turno selo-turno--2">T2</span>';
+    return '<span class="selo-turno">—</span>';
+  }
+
+  function fmtNum(n) {
+    return n ? String(n) : "";
+  }
+
+  function esc(s) {
+    return String(s == null ? "" : s)
+      .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  }
+
+  filtroTurno.querySelectorAll(".tab-pill").forEach(function (pill) {
+    pill.addEventListener("click", function () {
+      estadoTurno = pill.getAttribute("data-turno");
+      filtroTurno.querySelectorAll(".tab-pill").forEach(function (p) { p.classList.toggle("ativo", p === pill); });
+      renderResumoOperador();
+    });
+  });
+
+  var intervalId = null;
+  function ativar() { carregar(); intervalId = setInterval(carregar, 30000); }
+  function desativar() { if (intervalId) { clearInterval(intervalId); intervalId = null; } }
+  window.Exp.AdminViews.desempenho = { ativar: ativar, desativar: desativar };
+  // Exposto pra tela do operador reusar o mesmo gráfico de colunas (Turno 1
+  // x Turno 2 e "minhas cargas por dia") sem duplicar o código de SVG.
+  window.Exp.svgColunasAgrupadas = svgColunasAgrupadas;
+})();
+</script>
+
+<script>
+/* ==================== app.js (adaptado: abas do admin mobile + badge) ==================== */
+(function () {
+  "use strict";
+
+  var E = window.Exp;
+  window.Exp.AdminViews = window.Exp.AdminViews || {};
+
+  var adminTabs = document.querySelectorAll("#adminTabs .tab-pill");
+  var adminSections = document.querySelectorAll(".admin-view");
+  var badgeDistribuicao = document.getElementById("adminBadgeDistribuicao");
+
+  var abaAtual = null;
+
+  function ativarAba(nome) {
+    if (abaAtual === nome) return;
+    if (abaAtual && E.AdminViews[abaAtual] && E.AdminViews[abaAtual].desativar) {
+      E.AdminViews[abaAtual].desativar();
+    }
+    abaAtual = nome;
+    adminTabs.forEach(function (t) { t.classList.toggle("ativo", t.getAttribute("data-view") === nome); });
+    adminSections.forEach(function (s) { s.classList.toggle("ativo", s.getAttribute("data-view") === nome); });
+    if (nome && E.AdminViews[nome] && E.AdminViews[nome].ativar) E.AdminViews[nome].ativar();
+  }
+
+  adminTabs.forEach(function (tab) {
+    tab.addEventListener("click", function () { ativarAba(tab.getAttribute("data-view")); });
+  });
+
+  // Reaproveita os dados que cada tela já buscou sozinha (rows + separação)
+  // pra atualizar o contador da aba Distribuição — sem nenhuma requisição
+  // extra só pro badge.
+  function atualizarBadgeComDados(rows, separacaoMapa) {
+    var agora = Date.now();
+    var pendentes = E.agregar(rows || [], separacaoMapa || {}).map(function (c) {
+      c._c = E.computar(c, agora);
+      return c;
+    }).filter(function (c) {
+      return c._c.status === E.STATUS.AGUARDANDO_SEPARACAO && !c.operador;
+    }).length;
+    badgeDistribuicao.textContent = pendentes;
+    badgeDistribuicao.hidden = pendentes === 0;
+  }
+
+  window.Exp.AdminShell = {
+    ativarAba: ativarAba,
+    atualizarBadgeComDados: atualizarBadgeComDados
+  };
+})();
+</script>
+
+<script>
+/* ==================== operador.js (adaptado: Firestore em vez de chrome.storage) ==================== */
+(function () {
+  "use strict";
+
+  var E = window.Exp;
+  var estado = { rows: [], separacao: {}, operadores: [] };
+
+  // Credenciais do administrador — troque aqui se quiser outro usuário/senha.
+  var ADMIN_USUARIO = "adm";
+  var ADMIN_SENHA = "adm@2025";
+
+  var statusBanner = document.getElementById("statusBanner");
+  var telaLogin = document.getElementById("telaLogin");
+  var topoLogado = document.getElementById("topoLogado");
+  var sessaoLabel = document.getElementById("sessaoLabel");
+  var btnSairGlobal = document.getElementById("btnSairGlobal");
+  var viewAdmin = document.getElementById("viewAdmin");
+  var telaOperador = document.getElementById("telaOperador");
+
+  var inputUsuario = document.getElementById("inputUsuario");
+  var inputSenha = document.getElementById("inputSenha");
+  var erroLogin = document.getElementById("erroLogin");
+  var btnEntrar = document.getElementById("btnEntrar");
+  var listaCargas = document.getElementById("listaCargas");
+  var vazioCargas = document.getElementById("vazioCargas");
+  var opKpiTotal = document.getElementById("opKpiTotal");
+  var opChartMeuDia = document.getElementById("opChartMeuDia");
+  var opVazioMeuDia = document.getElementById("opVazioMeuDia");
+  var opChartTurnoDiario = document.getElementById("opChartTurnoDiario");
+  var opVazioTurnoDiario = document.getElementById("opVazioTurnoDiario");
+
+  var SESSAO_KEY = "exp_sessao"; // { tipo: "admin" } ou { tipo: "operador", nome }
+
+  function usaFirestore() {
+    return !!(E.Db && E.Db.temConfig());
+  }
+
+  function mostrarBanner(msg, offline) {
+    if (!msg) { statusBanner.hidden = true; return; }
+    statusBanner.hidden = false;
+    statusBanner.textContent = msg;
+    statusBanner.className = "status-banner" + (offline ? " offline" : "");
+  }
+
+  function carregar(cb) {
+    if (usaFirestore()) {
+      Promise.all([
+        E.Db.getDoc("estado", "hisowerRows"),
+        E.Db.getDoc("estado", "operadores"),
+        E.Db.listCollection("separacao")
+      ]).then(function (r) {
+        estado.rows = (r[0] && r[0].rows) || [];
+        estado.operadores = (r[1] && r[1].lista) || [];
+        var mapa = {};
+        (r[2] || []).forEach(function (doc) {
+          if (doc.chaveOriginal) mapa[doc.chaveOriginal] = doc;
+        });
+        estado.separacao = mapa;
+        mostrarBanner(null);
+        if (cb) cb();
+      }).catch(function (e) {
+        mostrarBanner("Sem conexão com o banco — mostrando últimos dados salvos.", true);
+        if (cb) cb();
+      });
+    } else {
+      try {
+        var demo = JSON.parse(localStorage.getItem("exp_demo") || "{}");
+        estado.rows = demo.hisowerRows || [];
+        estado.separacao = demo.separacao || {};
+        estado.operadores = demo.operadores || [];
+      } catch (e) { /* ignore */ }
+      mostrarBanner("Modo demo local — configure o Firebase para dados reais.", false);
+      if (cb) cb();
+    }
+  }
+
+  function persistirSeparacao(chave, patch) {
+    var atual = estado.separacao[chave] || {};
+
+    // Reconciliação da separação antecipada — ver extension/distribuicao.js
+    // pra explicação completa: promove os campos do órfão "PEND:placa" pro
+    // documento da chave real, na primeira gravação sob ela (acontece aqui
+    // quando o operador clica Iniciar/Finalizar logo depois da carga ganhar
+    // "Entrou na Portaria").
+    var chaveOrfa = null;
+    if (Object.keys(atual).length === 0 && !E.ehChavePendente(chave)) {
+      var candidata = E.chavePendente(E.placaDaChave(chave));
+      if (estado.separacao[candidata]) {
+        atual = Object.assign({}, estado.separacao[candidata]);
+        chaveOrfa = candidata;
+      }
+    }
+
+    var novo = Object.assign({}, atual, patch);
+    estado.separacao = Object.assign({}, estado.separacao);
+    estado.separacao[chave] = novo;
+    if (chaveOrfa) delete estado.separacao[chaveOrfa];
+
+    if (usaFirestore()) {
+      var docId = E.Db.chaveParaDocId(chave);
+      E.Db.setDoc("separacao", docId, Object.assign({ chaveOriginal: chave }, novo), { merge: true })
+        .catch(function () { mostrarBanner("Não deu pra salvar agora — tente de novo.", true); });
+      if (chaveOrfa) {
+        E.Db.deleteDoc("separacao", E.Db.chaveParaDocId(chaveOrfa)).catch(function () { /* ignore */ });
+      }
+    } else {
+      try {
+        var demo = JSON.parse(localStorage.getItem("exp_demo") || "{}");
+        demo.separacao = estado.separacao;
+        localStorage.setItem("exp_demo", JSON.stringify(demo));
+      } catch (e) { /* ignore */ }
+    }
+    renderCargas();
+    renderMeuDesempenho();
+  }
+
+  // ---- Login único — o sistema identifica sozinho se é admin ou operador ----
+
+  function sessaoAtual() {
+    try { return JSON.parse(localStorage.getItem(SESSAO_KEY) || "null"); } catch (e) { return null; }
+  }
+
+  function tentarLogin() {
+    var usuario = (inputUsuario.value || "").trim();
+    var senha = (inputSenha.value || "").trim();
+
+    if (usuario.toLowerCase() === ADMIN_USUARIO.toLowerCase() && senha === ADMIN_SENHA) {
+      erroLogin.hidden = true;
+      localStorage.setItem(SESSAO_KEY, JSON.stringify({ tipo: "admin" }));
+      entrarComoAdmin();
+      return;
+    }
+
+    var op = estado.operadores.filter(function (o) { return o.nome.toLowerCase() === usuario.toLowerCase(); })[0];
+    if (op && op.pin === senha) {
+      erroLogin.hidden = true;
+      localStorage.setItem(SESSAO_KEY, JSON.stringify({ tipo: "operador", nome: op.nome }));
+      entrarComoOperador(op.nome);
+      return;
+    }
+
+    erroLogin.textContent = "Usuário ou senha incorretos.";
+    erroLogin.hidden = false;
+  }
+
+  function sair() {
+    localStorage.removeItem(SESSAO_KEY);
+    inputUsuario.value = "";
+    inputSenha.value = "";
+    topoLogado.hidden = true;
+    viewAdmin.hidden = true;
+    telaOperador.hidden = true;
+    telaLogin.hidden = false;
+    if (window.Exp && Exp.AdminShell) Exp.AdminShell.ativarAba(null);
+  }
+
+  // Só o administrador vê o app inteiro (Painel/Distribuição/Resumo/
+  // Desempenho) — o operador só vê as próprias cargas.
+  function entrarComoAdmin() {
+    telaLogin.hidden = true;
+    telaOperador.hidden = true;
+    viewAdmin.hidden = false;
+    topoLogado.hidden = false;
+    sessaoLabel.textContent = "Administrador";
+    if (window.Exp && Exp.AdminShell) Exp.AdminShell.ativarAba("painel");
+  }
+
+  function entrarComoOperador(nome) {
+    telaLogin.hidden = true;
+    viewAdmin.hidden = true;
+    telaOperador.hidden = false;
+    topoLogado.hidden = false;
+    sessaoLabel.textContent = "Olá, " + nome;
+    renderCargas();
+    renderMeuDesempenho();
+  }
+
+  // ---- Lista de cargas do operador logado ----
+
+  function renderCargas() {
+    var sessao = sessaoAtual();
+    if (!sessao || sessao.tipo !== "operador") return;
+    var nome = sessao.nome;
+
+    var agora = Date.now();
+    var cargas = E.agregar(estado.rows, estado.separacao).map(function (c) {
+      c._c = E.computar(c, agora);
+      return c;
+    }).filter(function (c) {
+      return c.operador === nome &&
+        (c._c.status === E.STATUS.AGUARDANDO_SEPARACAO || c._c.status === E.STATUS.EM_SEPARACAO);
+    }).sort(function (a, b) {
+      var ta = a._flags.ordemMontadaTs ? a._flags.ordemMontadaTs.getTime() : 0;
+      var tb = b._flags.ordemMontadaTs ? b._flags.ordemMontadaTs.getTime() : 0;
+      return ta - tb;
+    });
+
+    listaCargas.innerHTML = "";
+    vazioCargas.hidden = cargas.length > 0;
+    cargas.forEach(function (c) { listaCargas.appendChild(cardCarga(c)); });
+  }
+
+  // ---- Meu desempenho (só o operador logado, últimos 30 dias) ----
+
+  var DIAS_DESEMPENHO_OPERADOR = 29; // 30 dias incluindo hoje — mesma janela do Desempenho do admin.
+
+  function renderMeuDesempenho() {
+    var sessao = sessaoAtual();
+    if (!sessao || sessao.tipo !== "operador") return;
+    if (!E.svgColunasAgrupadas) return; // bloco do Desempenho ainda não carregou os gráficos.
+    var nome = sessao.nome;
+
+    var agora = Date.now();
+    var hoje = new Date(agora);
+    var cargas = E.agregar(estado.rows, estado.separacao).map(function (c) {
+      c._c = E.computar(c, agora);
+      return c;
+    });
+    var d = E.desempenhoOperadores(cargas, DIAS_DESEMPENHO_OPERADOR, hoje, estado.operadores);
+
+    var meu = d.operadores.filter(function (o) { return o.nome === nome; })[0];
+    var total = meu ? meu.total : 0;
+    opKpiTotal.textContent = total;
+
+    opVazioMeuDia.hidden = total > 0;
+    opChartMeuDia.innerHTML = total ? E.svgColunasAgrupadas(d.dias, [
+      { rotulo: nome, cor: "var(--bar)", valores: d.dias.map(function (dd) { return (meu && meu.porDia[dd.key]) || 0; }) }
+    ]) : "";
+
+    var totalTurnos = d.turnos.reduce(function (acc, t) { return acc + t.total; }, 0);
+    opVazioTurnoDiario.hidden = totalTurnos > 0;
+    opChartTurnoDiario.innerHTML = totalTurnos ? E.svgColunasAgrupadas(d.dias, [
+      { rotulo: "Turno 1", cor: "var(--turno1)", valores: d.dias.map(function (dd) { return d.turnos[0].porDia[dd.key]; }) },
+      { rotulo: "Turno 2", cor: "var(--turno2)", valores: d.dias.map(function (dd) { return d.turnos[1].porDia[dd.key]; }) }
+    ]) : "";
+  }
+
+  function cardCarga(c) {
+    var div = document.createElement("div");
+    div.className = "card-carga";
+
+    var emSeparacao = c._c.status === E.STATUS.EM_SEPARACAO;
+
+    div.innerHTML =
+      '<div class="card-topo">' +
+        '<span class="card-carga-web">' + esc(c.progWeb) + "</span>" +
+        '<span class="status-badge" style="background:' + esc(E.corStatus(c._c.status)) + '">' + esc(c._c.status) + "</span>" +
+      "</div>" +
+      linhaInfo("Placa", c.placa) +
+      linhaInfo("Empresa", c.empresa) +
+      linhaInfo("Cliente", c.cliente) +
+      (emSeparacao ? '<div class="card-desde">Iniciada há ' + E.fmtDur(c._c.duracaoStatusMs) + "</div>" : "");
+
+    var btn = document.createElement("button");
+    btn.type = "button";
+    if (emSeparacao) {
+      btn.className = "card-acao finalizar";
+      btn.textContent = "Finalizar separação";
+      btn.addEventListener("click", function () { finalizar(c.chave); });
+    } else {
+      btn.className = "card-acao iniciar";
+      btn.textContent = "Iniciar separação";
+      btn.addEventListener("click", function () { iniciar(c.chave); });
+    }
+    div.appendChild(btn);
+
+    return div;
+  }
+
+  function linhaInfo(rotulo, valor) {
+    return '<div class="card-linha"><span class="rotulo">' + esc(rotulo) + '</span><span class="valor">' + esc(valor) + "</span></div>";
+  }
+
+  function iniciar(chave) {
+    persistirSeparacao(chave, { inicioEm: new Date().toISOString() });
+  }
+
+  function finalizar(chave) {
+    persistirSeparacao(chave, { fimEm: new Date().toISOString() });
+  }
+
+  function esc(s) {
+    return String(s == null ? "" : s)
+      .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  }
+
+  btnEntrar.addEventListener("click", tentarLogin);
+  inputSenha.addEventListener("keydown", function (e) {
+    if (e.key === "Enter") tentarLogin();
+  });
+  btnSairGlobal.addEventListener("click", sair);
+
+  function init() {
+    var sessao = sessaoAtual();
+    if (sessao && sessao.tipo === "admin") {
+      entrarComoAdmin();
+    } else if (sessao && sessao.tipo === "operador" && estado.operadores.some(function (o) { return o.nome === sessao.nome; })) {
+      entrarComoOperador(sessao.nome);
+    } else {
+      if (sessao) localStorage.removeItem(SESSAO_KEY);
+      telaLogin.hidden = false;
+    }
+  }
+
+  setInterval(function () { carregar(function () { renderCargas(); renderMeuDesempenho(); }); }, 15000);
+
+  carregar(init);
+})();
+</script>
+</body>
+</html>
