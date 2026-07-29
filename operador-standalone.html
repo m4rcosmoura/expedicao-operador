@@ -202,6 +202,8 @@ tbody tr:nth-child(even) { background: var(--stripe); }
 
 .tela-login { min-height: 100vh; display: flex; align-items: center; justify-content: center; padding: 24px; }
 .tela-login[hidden], .tela-operador[hidden] { display: none; }
+.tela-carregando { min-height: 100vh; display: flex; align-items: center; justify-content: center; padding: 24px; color: var(--txt-faint); font-size: var(--fs-body); }
+.tela-carregando[hidden] { display: none; }
 .login-card {
   width: 100%; max-width: 340px; background: var(--surface);
   border-radius: 16px; padding: 28px 24px;
@@ -400,6 +402,8 @@ td.nivel-vermelho { color: #c62828; font-weight: 700; }
     <button id="btnEntrar" class="btn-entrar" type="button">Entrar</button>
   </div>
 </section>
+
+<section id="telaCarregandoSessao" class="tela-carregando" hidden>Carregando…</section>
 
 <header class="topbar" id="topoLogado" hidden>
   <h1>Expedição</h1>
@@ -2564,6 +2568,7 @@ window.EXP_SHEETS_CONFIG = {
 
   var statusBanner = document.getElementById("statusBanner");
   var telaLogin = document.getElementById("telaLogin");
+  var telaCarregandoSessao = document.getElementById("telaCarregandoSessao");
   var topoLogado = document.getElementById("topoLogado");
   var sessaoLabel = document.getElementById("sessaoLabel");
   var btnSairGlobal = document.getElementById("btnSairGlobal");
@@ -2844,6 +2849,7 @@ window.EXP_SHEETS_CONFIG = {
   btnSairGlobal.addEventListener("click", sair);
 
   function init() {
+    telaCarregandoSessao.hidden = true;
     var sessao = sessaoAtual();
     if (sessao && sessao.tipo === "admin") {
       entrarComoAdmin();
@@ -2856,6 +2862,15 @@ window.EXP_SHEETS_CONFIG = {
   }
 
   setInterval(function () { carregar(function () { renderCargas(); renderMeuDesempenho(); }); }, 15000);
+
+  // Quem já tinha sessão salva vê "Carregando…" em vez do formulário de login
+  // enquanto os dados da primeira captura chegam — sem isso, qualquer demora
+  // na primeira resposta (rede lenta, cold start do Apps Script) mostra a
+  // tela de login por alguns segundos e parece que a sessão se perdeu.
+  if (sessaoAtual()) {
+    telaLogin.hidden = true;
+    telaCarregandoSessao.hidden = false;
+  }
 
   carregar(init);
 })();
