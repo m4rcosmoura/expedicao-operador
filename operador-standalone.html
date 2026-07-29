@@ -736,12 +736,11 @@ td.nivel-vermelho { color: #c62828; font-weight: 700; }
 </section>
 
 <script>
-/* ==================== firebaseConfig ====================
-   Cole aqui o config do seu projeto Firebase antes de enviar este arquivo
-   pro celular. Enquanto ficar vazio, roda em modo demo local. */
-window.EXP_FIREBASE_CONFIG = {
-  apiKey: "AIzaSyAUrrpV1v6NHL7AE4Uls3522QgVwbeb-_w",
-  projectId: "expedicao-dca5a"
+/* ==================== EXP_SHEETS_CONFIG ====================
+   Cole aqui a URL do Web App do Apps Script antes de enviar este arquivo pro
+   celular. Enquanto ficar vazia, roda em modo demo local. */
+window.EXP_SHEETS_CONFIG = {
+  webAppUrl: "https://script.google.com/macros/s/AKfycbwm4VdrV25DcRHVMT-6qLcvPXhaBhubdJsP66FBYHPdmEhNu_9Y8BPL_d_SYQc7Olbp/exec"
 };
 </script>
 
@@ -1185,23 +1184,22 @@ window.EXP_FIREBASE_CONFIG = {
 </script>
 
 <script>
-/* ==================== firestore-client.js ==================== */
+/* ==================== firestore-client.js (adaptado: Google Sheets via Apps Script Web App) ==================== */
 (function () {
   "use strict";
 
-  var CONFIG = window.EXP_FIREBASE_CONFIG || null;
-  var AUTH_KEY = "exp_fbAuth";
+  var CONFIG = window.EXP_SHEETS_CONFIG || null;
 
   function temConfig() {
-    return !!(CONFIG && CONFIG.apiKey && CONFIG.projectId);
+    return !!(CONFIG && CONFIG.webAppUrl);
   }
 
-  // Timeout de segurança pra qualquer chamada ao Firestore/Identity Toolkit.
-  // Em alguns contextos (ex.: o arquivo aberto via WhatsApp/Mensagens no
-  // iPhone, que roda a página numa aba sandboxada) o fetch() nunca resolve
-  // NEM rejeita — sem isso, a tela de login fica travada pra sempre
-  // esperando uma resposta que nunca chega. Com o timeout, o .catch() de
-  // cada chamada dispara normalmente e a tela cai pro modo local/offline.
+  // Timeout de segurança pra qualquer chamada ao Web App. Em alguns contextos
+  // (ex.: o arquivo aberto via WhatsApp/Mensagens no iPhone, que roda a
+  // página numa aba sandboxada) o fetch() nunca resolve NEM rejeita — sem
+  // isso, a tela de login fica travada pra sempre esperando uma resposta que
+  // nunca chega. Com o timeout, o .catch() de cada chamada dispara
+  // normalmente e a tela cai pro modo local/offline.
   var FETCH_TIMEOUT_MS = 10000;
   function fetchComTimeout(url, opts) {
     return new Promise(function (resolve, reject) {
@@ -1209,7 +1207,7 @@ window.EXP_FIREBASE_CONFIG = {
       var timer = setTimeout(function () {
         if (atendido) return;
         atendido = true;
-        reject(new Error("Tempo esgotado ao conectar com o Firestore."));
+        reject(new Error("Tempo esgotado ao conectar com a planilha."));
       }, FETCH_TIMEOUT_MS);
       fetch(url, opts).then(function (res) {
         if (atendido) return;
@@ -1225,186 +1223,46 @@ window.EXP_FIREBASE_CONFIG = {
     });
   }
 
-  function lerAuth() {
-    return new Promise(function (resolve) {
-      try { resolve(JSON.parse(localStorage.getItem(AUTH_KEY) || "null")); }
-      catch (e) { resolve(null); }
-    });
-  }
-
-  function gravarAuth(auth) {
-    return new Promise(function (resolve) {
-      try { localStorage.setItem(AUTH_KEY, JSON.stringify(auth)); } catch (e) { /* ignore */ }
-      resolve();
-    });
-  }
-
-  function signUpAnonimo() {
-    return fetchComTimeout("https://identitytoolkit.googleapis.com/v1/accounts:signUp?key=" + CONFIG.apiKey, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ returnSecureToken: true })
-    }).then(function (res) {
-      if (!res.ok) throw new Error("Falha no login anônimo: HTTP " + res.status);
-      return res.json();
-    }).then(function (r) {
-      return {
-        idToken: r.idToken,
-        refreshToken: r.refreshToken,
-        localId: r.localId,
-        expiresAt: Date.now() + (Number(r.expiresIn) * 1000)
-      };
-    });
-  }
-
-  function renovarToken(refreshToken) {
-    return fetchComTimeout("https://securetoken.googleapis.com/v1/token?key=" + CONFIG.apiKey, {
-      method: "POST",
-      headers: { "Content-Type": "application/x-www-form-urlencoded" },
-      body: "grant_type=refresh_token&refresh_token=" + encodeURIComponent(refreshToken)
-    }).then(function (res) {
-      if (!res.ok) throw new Error("Falha ao renovar token: HTTP " + res.status);
-      return res.json();
-    }).then(function (r) {
-      return {
-        idToken: r.id_token,
-        refreshToken: r.refresh_token,
-        localId: r.user_id,
-        expiresAt: Date.now() + (Number(r.expires_in) * 1000)
-      };
-    });
-  }
-
-  var MARGEM_MS = 5 * 60000;
-
-  function ensureAuth() {
-    if (!temConfig()) return Promise.reject(new Error("firebaseConfig não configurado."));
-    return lerAuth().then(function (auth) {
-      if (auth && auth.idToken && auth.expiresAt > Date.now() + MARGEM_MS) {
-        return auth;
-      }
-      var renovar = auth && auth.refreshToken ? renovarToken(auth.refreshToken) : signUpAnonimo();
-      return renovar.catch(function () { return signUpAnonimo(); }).then(function (novo) {
-        return gravarAuth(novo).then(function () { return novo; });
-      });
-    });
-  }
-
-  function paraValorFirestore(v) {
-    if (v === null || v === undefined) return { nullValue: null };
-    if (typeof v === "string") return { stringValue: v };
-    if (typeof v === "boolean") return { booleanValue: v };
-    if (typeof v === "number") {
-      return Number.isInteger(v) ? { integerValue: String(v) } : { doubleValue: v };
-    }
-    if (Array.isArray(v)) {
-      return { arrayValue: { values: v.map(paraValorFirestore) } };
-    }
-    if (typeof v === "object") {
-      return { mapValue: { fields: paraCamposFirestore(v) } };
-    }
-    return { stringValue: String(v) };
-  }
-
-  function paraCamposFirestore(obj) {
-    var fields = {};
-    Object.keys(obj || {}).forEach(function (k) {
-      if (obj[k] !== undefined) fields[k] = paraValorFirestore(obj[k]);
-    });
-    return fields;
-  }
-
-  function deValorFirestore(v) {
-    if (!v) return null;
-    if ("stringValue" in v) return v.stringValue;
-    if ("integerValue" in v) return parseInt(v.integerValue, 10);
-    if ("doubleValue" in v) return v.doubleValue;
-    if ("booleanValue" in v) return v.booleanValue;
-    if ("timestampValue" in v) return v.timestampValue;
-    if ("nullValue" in v) return null;
-    if ("arrayValue" in v) return ((v.arrayValue && v.arrayValue.values) || []).map(deValorFirestore);
-    if ("mapValue" in v) return deCamposFirestore((v.mapValue && v.mapValue.fields) || {});
-    return null;
-  }
-
-  function deCamposFirestore(fields) {
-    var obj = {};
-    Object.keys(fields || {}).forEach(function (k) { obj[k] = deValorFirestore(fields[k]); });
-    return obj;
-  }
-
-  function urlDoc(colecao, id) {
-    return "https://firestore.googleapis.com/v1/projects/" + CONFIG.projectId +
-      "/databases/(default)/documents/" + colecao + "/" + encodeURIComponent(id);
-  }
-
   function getDoc(colecao, id) {
-    return ensureAuth().then(function (auth) {
-      return fetchComTimeout(urlDoc(colecao, id), {
-        headers: { Authorization: "Bearer " + auth.idToken }
-      });
-    }).then(function (res) {
-      if (res.status === 404) return null;
-      if (!res.ok) throw new Error("Firestore getDoc HTTP " + res.status);
-      return res.json();
-    }).then(function (json) {
-      return json ? deCamposFirestore(json.fields || {}) : null;
-    });
-  }
-
-  function setDoc(colecao, id, objetoPlano, opts) {
-    opts = opts || {};
-    return ensureAuth().then(function (auth) {
-      var chaves = Object.keys(objetoPlano || {});
-      var query = opts.merge
-        ? "?" + chaves.map(function (k) { return "updateMask.fieldPaths=" + encodeURIComponent(k); }).join("&")
-        : "";
-      return fetchComTimeout(urlDoc(colecao, id) + query, {
-        method: "PATCH",
-        headers: {
-          Authorization: "Bearer " + auth.idToken,
-          "Content-Type": "application/json"
-        },
-        body: JSON.stringify({ fields: paraCamposFirestore(objetoPlano) })
-      });
-    }).then(function (res) {
-      if (!res.ok) throw new Error("Firestore setDoc HTTP " + res.status);
+    if (!temConfig()) return Promise.reject(new Error("Web App não configurado."));
+    var url = CONFIG.webAppUrl + "?action=getDoc&colecao=" + encodeURIComponent(colecao) + "&id=" + encodeURIComponent(id);
+    return fetchComTimeout(url).then(function (res) {
+      if (!res.ok) throw new Error("Planilha getDoc HTTP " + res.status);
       return res.json();
     });
   }
 
   function listCollection(colecao) {
-    return ensureAuth().then(function (auth) {
-      return fetchComTimeout(urlColecao(colecao) + "?pageSize=300", {
-        headers: { Authorization: "Bearer " + auth.idToken }
-      });
-    }).then(function (res) {
-      if (!res.ok) throw new Error("Firestore listCollection HTTP " + res.status);
+    if (!temConfig()) return Promise.reject(new Error("Web App não configurado."));
+    var url = CONFIG.webAppUrl + "?action=listCollection&colecao=" + encodeURIComponent(colecao);
+    return fetchComTimeout(url).then(function (res) {
+      if (!res.ok) throw new Error("Planilha listCollection HTTP " + res.status);
       return res.json();
-    }).then(function (json) {
-      return (json.documents || []).map(function (doc) {
-        var partes = doc.name.split("/");
-        var obj = deCamposFirestore(doc.fields || {});
-        obj._id = partes[partes.length - 1];
-        return obj;
-      });
     });
   }
 
-  function urlColecao(colecao) {
-    return "https://firestore.googleapis.com/v1/projects/" + CONFIG.projectId +
-      "/databases/(default)/documents/" + colecao;
+  // IMPORTANTE (CORS): manda o POST com Content-Type text/plain — se fosse
+  // application/json o navegador dispararia um preflight OPTIONS, que o Apps
+  // Script Web App não responde corretamente, e a chamada falharia por CORS.
+  function post(body) {
+    return fetchComTimeout(CONFIG.webAppUrl, {
+      method: "POST",
+      headers: { "Content-Type": "text/plain;charset=utf-8" },
+      body: JSON.stringify(body)
+    }).then(function (res) {
+      if (!res.ok) throw new Error("Planilha HTTP " + res.status);
+      return res.json();
+    });
+  }
+
+  function setDoc(colecao, id, objetoPlano, opts) {
+    if (!temConfig()) return Promise.reject(new Error("Web App não configurado."));
+    return post({ action: "setDoc", colecao: colecao, id: id, dados: objetoPlano, opts: opts || {} });
   }
 
   function deleteDoc(colecao, id) {
-    return ensureAuth().then(function (auth) {
-      return fetchComTimeout(urlDoc(colecao, id), {
-        method: "DELETE",
-        headers: { Authorization: "Bearer " + auth.idToken }
-      });
-    }).then(function (res) {
-      if (!res.ok && res.status !== 404) throw new Error("Firestore deleteDoc HTTP " + res.status);
-    });
+    if (!temConfig()) return Promise.reject(new Error("Web App não configurado."));
+    return post({ action: "deleteDoc", colecao: colecao, id: id });
   }
 
   function chaveParaDocId(chave) {
@@ -1414,7 +1272,6 @@ window.EXP_FIREBASE_CONFIG = {
   window.Exp = window.Exp || {};
   window.Exp.Db = {
     temConfig: temConfig,
-    ensureAuth: ensureAuth,
     getDoc: getDoc,
     setDoc: setDoc,
     deleteDoc: deleteDoc,
