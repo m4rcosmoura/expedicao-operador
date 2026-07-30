@@ -209,13 +209,14 @@ tbody tr:nth-child(even) { background: var(--stripe); }
 }
 .faixa-carregando[hidden] { display: none; }
 
+/* Navy sólido: a barra superior é clara, então texto/borda brancos sumiam. */
 .btn-atualizar {
   font-family: inherit; font-size: var(--fs-small); font-weight: 700; cursor: pointer;
-  padding: 5px 12px; border-radius: 6px;
-  border: 1px solid rgba(255, 255, 255, .35); background: transparent; color: #ffffff;
+  padding: 8px 14px; border-radius: 8px;
+  border: none; background: var(--navy); color: #ffffff;
 }
-.btn-atualizar:hover { background: rgba(255, 255, 255, .12); }
-.btn-atualizar[disabled] { opacity: .5; cursor: default; }
+.btn-atualizar:hover { filter: brightness(1.15); }
+.btn-atualizar[disabled] { opacity: .45; cursor: default; }
 
 .form-operador { display: flex; gap: 8px; flex-wrap: wrap; }
 .form-operador input, .form-operador select {
@@ -1447,18 +1448,22 @@ window.EXP_SHEETS_CONFIG = {
     if (faixa) faixa.hidden = true;
   }
 
-  function getTudo() {
+  // mostrarFaixa: só quando o carregamento é pedido pelo usuário (botão
+  // "Atualizar") ou é o primeiro ao abrir a página. A atualização automática
+  // de 15-30s roda sem faixa — senão ela ficaria piscando o tempo todo.
+  function getTudo(mostrarFaixa) {
     if (!temConfig()) return Promise.reject(new Error("Web App não configurado."));
-    marcarInicio();
+    if (mostrarFaixa) marcarInicio();
+    function terminar() { if (mostrarFaixa) marcarFim(); }
     return fetchComTimeout(CONFIG.webAppUrl + "?action=getTudo").then(function (res) {
       if (!res.ok) throw new Error("Planilha getTudo HTTP " + res.status);
       return res.json();
     }).then(function (json) {
       gravarCache(json);
-      marcarFim();
+      terminar();
       return json;
     }, function (e) {
-      marcarFim();
+      terminar();
       throw e;
     });
   }
@@ -1552,13 +1557,13 @@ window.EXP_SHEETS_CONFIG = {
     avisarBadge();
   }
 
-  function carregar() {
+  function carregar(explicito) {
     if (usaFirestore()) {
       // Pinta na hora com o último dado bom guardado no aparelho, pra a tela
       // não ficar em branco durante os segundos que o Apps Script leva. Os
       // dados frescos substituem isso assim que chegarem.
       if (!jaCarregouOk) aplicar(E.Db.cacheOuDemo());
-      E.Db.getTudo().then(function (t) {
+      E.Db.getTudo(explicito).then(function (t) {
         jaCarregouOk = true;
         aplicar(t);
       }).catch(function () {
@@ -1811,9 +1816,9 @@ window.EXP_SHEETS_CONFIG = {
   }
 
   var intervalId = null;
-  function ativar() { carregar(); intervalId = setInterval(carregar, 30000); }
+  function ativar() { carregar(!jaCarregouOk); intervalId = setInterval(function () { carregar(false); }, 30000); }
   function desativar() { if (intervalId) { clearInterval(intervalId); intervalId = null; } }
-  window.Exp.AdminViews.painel = { ativar: ativar, desativar: desativar, recarregar: carregar };
+  window.Exp.AdminViews.painel = { ativar: ativar, desativar: desativar, recarregar: function () { carregar(true); } };
 })();
 </script>
 
@@ -1871,11 +1876,11 @@ window.EXP_SHEETS_CONFIG = {
     if (E.AdminShell) E.AdminShell.atualizarBadgeComDados(estado.rows, estado.separacao);
   }
 
-  function carregar() {
+  function carregar(explicito) {
     if (usaFirestore()) {
       // Pinta na hora com o último dado bom, pra a tela não ficar em branco.
       if (!jaCarregouOk) aplicar(E.Db.cacheOuDemo());
-      E.Db.getTudo().then(function (t) {
+      E.Db.getTudo(explicito).then(function (t) {
         jaCarregouOk = true;
         aplicar(t);
       }).catch(function () {
@@ -2537,10 +2542,10 @@ window.EXP_SHEETS_CONFIG = {
   });
 
   var intervalId = null;
-  function ativar() { carregar(); intervalId = setInterval(carregar, 30000); }
+  function ativar() { carregar(!jaCarregouOk); intervalId = setInterval(function () { carregar(false); }, 30000); }
   function desativar() { if (intervalId) { clearInterval(intervalId); intervalId = null; } }
   window.Exp.AdminViews = window.Exp.AdminViews || {};
-  window.Exp.AdminViews.distribuicao = { ativar: ativar, desativar: desativar, recarregar: carregar };
+  window.Exp.AdminViews.distribuicao = { ativar: ativar, desativar: desativar, recarregar: function () { carregar(true); } };
 })();
 </script>
 
@@ -2574,11 +2579,11 @@ window.EXP_SHEETS_CONFIG = {
     if (E.AdminShell) E.AdminShell.atualizarBadgeComDados(rows, mapa);
   }
 
-  function carregar() {
+  function carregar(explicito) {
     if (usaFirestore()) {
       // Pinta na hora com o último dado bom, pra a tela não ficar em branco.
       if (!jaCarregouOk) aplicar(E.Db.cacheOuDemo());
-      E.Db.getTudo().then(function (t) {
+      E.Db.getTudo(explicito).then(function (t) {
         jaCarregouOk = true;
         aplicar(t);
       }).catch(function () {
@@ -2704,9 +2709,9 @@ window.EXP_SHEETS_CONFIG = {
   }
 
   var intervalId = null;
-  function ativar() { carregar(); intervalId = setInterval(carregar, 30000); }
+  function ativar() { carregar(!jaCarregouOk); intervalId = setInterval(function () { carregar(false); }, 30000); }
   function desativar() { if (intervalId) { clearInterval(intervalId); intervalId = null; } }
-  window.Exp.AdminViews.resumo = { ativar: ativar, desativar: desativar, recarregar: carregar };
+  window.Exp.AdminViews.resumo = { ativar: ativar, desativar: desativar, recarregar: function () { carregar(true); } };
 })();
 </script>
 
@@ -2769,11 +2774,11 @@ window.EXP_SHEETS_CONFIG = {
     if (E.AdminShell) E.AdminShell.atualizarBadgeComDados(rows, mapa);
   }
 
-  function carregar() {
+  function carregar(explicito) {
     if (usaFirestore()) {
       // Pinta na hora com o último dado bom, pra a tela não ficar em branco.
       if (!jaCarregouOk) aplicar(E.Db.cacheOuDemo());
-      E.Db.getTudo().then(function (t) {
+      E.Db.getTudo(explicito).then(function (t) {
         jaCarregouOk = true;
         aplicar(t);
       }).catch(function () {
@@ -3107,9 +3112,9 @@ window.EXP_SHEETS_CONFIG = {
   });
 
   var intervalId = null;
-  function ativar() { carregar(); intervalId = setInterval(carregar, 30000); }
+  function ativar() { carregar(!jaCarregouOk); intervalId = setInterval(function () { carregar(false); }, 30000); }
   function desativar() { if (intervalId) { clearInterval(intervalId); intervalId = null; } }
-  window.Exp.AdminViews.desempenho = { ativar: ativar, desativar: desativar, recarregar: carregar };
+  window.Exp.AdminViews.desempenho = { ativar: ativar, desativar: desativar, recarregar: function () { carregar(true); } };
   // Exposto pra tela do operador reusar o mesmo gráfico de colunas (Turno 1
   // x Turno 2 e "minhas cargas por dia") sem duplicar o código de SVG.
   window.Exp.svgColunasAgrupadas = svgColunasAgrupadas;
@@ -3236,13 +3241,13 @@ window.EXP_SHEETS_CONFIG = {
     estado.separacao = mapa;
   }
 
-  function carregar(cb) {
+  function carregar(cb, explicito) {
     if (usaFirestore()) {
       // Pinta na hora com o último dado bom guardado no aparelho: o operador
       // abre o app e já vê as cargas dele, em vez de tela vazia enquanto o
       // Apps Script responde.
       if (!jaCarregouOk) aplicar(E.Db.cacheOuDemo());
-      E.Db.getTudo().then(function (t) {
+      E.Db.getTudo(explicito).then(function (t) {
         jaCarregouOk = true;
         aplicar(t);
         mostrarBanner(null);
@@ -3522,7 +3527,7 @@ window.EXP_SHEETS_CONFIG = {
         renderCargas();
         renderMeuDesempenho();
         btnAtualizar.disabled = false;
-      });
+      }, true);
     }
   });
 
@@ -3553,7 +3558,8 @@ window.EXP_SHEETS_CONFIG = {
     telaCarregandoSessao.hidden = false;
   }
 
-  carregar(init);
+  // true: é a primeira carga ao abrir a página — aqui a faixa aparece.
+  carregar(init, true);
 })();
 </script>
 </body>
