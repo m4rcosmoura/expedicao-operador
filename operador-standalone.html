@@ -190,6 +190,33 @@ tbody tr:nth-child(even) { background: var(--stripe); }
 .btn-salvar:hover { filter: brightness(1.15); }
 .vazio-inline { padding: 14px 0; color: var(--txt-faint); font-size: var(--fs-small); }
 
+/* Nota curta ao lado da quantidade, no Resumo: diz qual é a pendência das
+   cargas separadas de forma antecipada, sem virar uma linha ou coluna extra. */
+.obs-celula { width: 1%; white-space: nowrap; padding-left: 10px !important; }
+.obs-tag {
+  display: inline-block; padding: 2px 8px; border-radius: 999px;
+  background: #fff8e1; color: #9a6400;
+  font-size: var(--fs-small); font-weight: 700; white-space: nowrap;
+}
+
+/* Faixa de "atualizando" no topo: fixa, pra ficar visível em qualquer aba e
+   em qualquer posição de rolagem, sem empurrar o conteúdo. */
+.faixa-carregando {
+  position: fixed; top: 0; left: 0; right: 0; z-index: 50;
+  padding: 5px 12px; text-align: center;
+  background: var(--navy); color: #ffffff;
+  font-size: var(--fs-small); font-weight: 700; letter-spacing: .02em;
+}
+.faixa-carregando[hidden] { display: none; }
+
+.btn-atualizar {
+  font-family: inherit; font-size: var(--fs-small); font-weight: 700; cursor: pointer;
+  padding: 5px 12px; border-radius: 6px;
+  border: 1px solid rgba(255, 255, 255, .35); background: transparent; color: #ffffff;
+}
+.btn-atualizar:hover { background: rgba(255, 255, 255, .12); }
+.btn-atualizar[disabled] { opacity: .5; cursor: default; }
+
 .form-operador { display: flex; gap: 8px; flex-wrap: wrap; }
 .form-operador input, .form-operador select {
   flex: 1; min-width: 200px; font-size: var(--fs-body); padding: 8px 12px;
@@ -466,10 +493,13 @@ tbody tr.linha-pendencia td:first-child { box-shadow: inset 3px 0 0 #b26a00; }
 
 <section id="telaCarregandoSessao" class="tela-carregando" hidden>Carregando…</section>
 
+<div id="faixaCarregando" class="faixa-carregando" hidden>Atualizando…</div>
+
 <header class="topbar" id="topoLogado" hidden>
   <h1>Expedição</h1>
   <div class="topo-sessao">
     <span id="sessaoLabel"></span>
+    <button id="btnAtualizar" class="btn-atualizar" type="button" title="Buscar dados novos agora">Atualizar</button>
     <button id="btnSairGlobal" class="btn-sair" type="button">Sair</button>
   </div>
 </header>
@@ -631,7 +661,7 @@ tbody tr.linha-pendencia td:first-child { box-shadow: inset 3px 0 0 #b26a00; }
     <h2>Cargas por status</h2>
     <div class="tabela-wrap">
       <table>
-        <thead><tr><th>Status</th><th class="num">Quantidade</th><th class="num" title="Subconjunto da quantidade — cargas com veículo não chegado ou ordem não finalizada. Nunca somar com a coluna Quantidade.">c/ pendência</th></tr></thead>
+        <thead><tr><th>Status</th><th class="num">Quantidade</th><th></th></tr></thead>
         <tbody id="rsmCorpoStatus"></tbody>
       </table>
     </div>
@@ -1378,11 +1408,58 @@ window.EXP_SHEETS_CONFIG = {
   // fazia 3 chamadas em paralelo, e com várias telas/aparelhos atualizando ao
   // mesmo tempo o Apps Script enfileirava o excesso e parte das leituras
   // estourava o tempo, deixando tudo zerado.
+  // Última resposta boa, guardada no aparelho. Serve pra pintar a tela na
+  // hora ao abrir/recarregar: o Apps Script leva alguns segundos, e sem isso
+  // a página ficava totalmente em branco até a resposta chegar.
+  var CACHE_KEY = "exp_cache";
+
+  function gravarCache(t) {
+    try { localStorage.setItem(CACHE_KEY, JSON.stringify(t)); } catch (e) { /* cota cheia: segue sem cache */ }
+  }
+
+  // Último dado bom; se nunca houve, cai no modo demo local.
+  function cacheOuDemo() {
+    try {
+      var c = JSON.parse(localStorage.getItem(CACHE_KEY) || "null");
+      if (c) return c;
+    } catch (e) { /* ignore */ }
+    var demo = {};
+    try { demo = JSON.parse(localStorage.getItem("exp_demo") || "{}"); } catch (e) { /* ignore */ }
+    return {
+      hisowerRows: { rows: demo.hisowerRows || [], capturedAt: demo.capturedAt || null, erroCaptura: null },
+      operadores: { lista: demo.operadores || [] },
+      separacao: []
+    };
+  }
+
+  // Faixa "atualizando" no topo. Conta requisições em voo porque as telas do
+  // admin podem buscar em paralelo — só some quando a última terminar.
+  var emVoo = 0;
+  function marcarInicio() {
+    emVoo++;
+    var faixa = document.getElementById("faixaCarregando");
+    if (faixa) faixa.hidden = false;
+  }
+  function marcarFim() {
+    emVoo = Math.max(0, emVoo - 1);
+    if (emVoo) return;
+    var faixa = document.getElementById("faixaCarregando");
+    if (faixa) faixa.hidden = true;
+  }
+
   function getTudo() {
     if (!temConfig()) return Promise.reject(new Error("Web App não configurado."));
+    marcarInicio();
     return fetchComTimeout(CONFIG.webAppUrl + "?action=getTudo").then(function (res) {
       if (!res.ok) throw new Error("Planilha getTudo HTTP " + res.status);
       return res.json();
+    }).then(function (json) {
+      gravarCache(json);
+      marcarFim();
+      return json;
+    }, function (e) {
+      marcarFim();
+      throw e;
     });
   }
 
@@ -1419,6 +1496,7 @@ window.EXP_SHEETS_CONFIG = {
     temConfig: temConfig,
     getDoc: getDoc,
     getTudo: getTudo,
+    cacheOuDemo: cacheOuDemo,
     setDoc: setDoc,
     deleteDoc: deleteDoc,
     listCollection: listCollection,
@@ -1457,44 +1535,38 @@ window.EXP_SHEETS_CONFIG = {
     if (E.AdminShell) E.AdminShell.atualizarBadgeComDados(estado.rows, estado.separacao);
   }
 
-  function carregarDemo() {
-    try {
-      var demo = JSON.parse(localStorage.getItem("exp_demo") || "{}");
-      estado.rows = demo.hisowerRows || [];
-      estado.separacao = demo.separacao || {};
-      estado.operadores = demo.operadores || [];
-      estado.capturedAt = demo.capturedAt || null;
-    } catch (e) { /* ignore */ }
+  // Aplica um payload no formato do getTudo (o cache tem o mesmo formato).
+  function aplicar(t) {
+    var h = t && t.hisowerRows;
+    estado.rows = (h && h.rows) || [];
+    estado.capturedAt = (h && h.capturedAt) || null;
+    // Operadores vêm no mesmo getTudo — necessários pro seletor de
+    // atribuição da aba "Aguardando ordem".
+    estado.operadores = (t && t.operadores && t.operadores.lista) || [];
+    var mapa = {};
+    ((t && t.separacao) || []).forEach(function (doc) { if (doc.chaveOriginal) mapa[doc.chaveOriginal] = doc; });
+    estado.separacao = mapa;
+    alerta.hidden = !(h && h.erroCaptura);
+    alerta.textContent = (h && h.erroCaptura) || "";
     render();
     avisarBadge();
   }
 
   function carregar() {
     if (usaFirestore()) {
+      // Pinta na hora com o último dado bom guardado no aparelho, pra a tela
+      // não ficar em branco durante os segundos que o Apps Script leva. Os
+      // dados frescos substituem isso assim que chegarem.
+      if (!jaCarregouOk) aplicar(E.Db.cacheOuDemo());
       E.Db.getTudo().then(function (t) {
-        var r = [t.hisowerRows, t.separacao];
-        estado.rows = (r[0] && r[0].rows) || [];
-        estado.capturedAt = (r[0] && r[0].capturedAt) || null;
-        // Operadores vêm no mesmo getTudo — necessários pro seletor de
-        // atribuição da aba "Aguardando ordem".
-        estado.operadores = (t.operadores && t.operadores.lista) || [];
-        var mapa = {};
-        (r[1] || []).forEach(function (doc) { if (doc.chaveOriginal) mapa[doc.chaveOriginal] = doc; });
-        estado.separacao = mapa;
-        alerta.hidden = !(r[0] && r[0].erroCaptura);
-        alerta.textContent = (r[0] && r[0].erroCaptura) || "";
         jaCarregouOk = true;
-        render();
-        avisarBadge();
+        aplicar(t);
       }).catch(function () {
         // Falha de leitura (rede instável, Apps Script enfileirado): mantém na
-        // tela o último dado bom em vez de zerar tudo. Sem isso, uma falha
-        // transitória do polling caía no modo demo — que aqui é vazio — e a
-        // tela mostrava "0 cargas" como se não houvesse nada.
-        if (!jaCarregouOk) carregarDemo();
+        // tela o que já está visível em vez de zerar tudo.
       });
     } else {
-      carregarDemo();
+      aplicar(E.Db.cacheOuDemo());
     }
   }
 
@@ -1741,7 +1813,7 @@ window.EXP_SHEETS_CONFIG = {
   var intervalId = null;
   function ativar() { carregar(); intervalId = setInterval(carregar, 30000); }
   function desativar() { if (intervalId) { clearInterval(intervalId); intervalId = null; } }
-  window.Exp.AdminViews.painel = { ativar: ativar, desativar: desativar };
+  window.Exp.AdminViews.painel = { ativar: ativar, desativar: desativar, recarregar: carregar };
 })();
 </script>
 
@@ -1782,33 +1854,36 @@ window.EXP_SHEETS_CONFIG = {
     return !!(E.Db && E.Db.temConfig());
   }
 
+  var jaCarregouOk = false;
+
+  // Aplica um payload no formato do getTudo (o cache tem o mesmo formato).
+  function aplicar(t) {
+    var h = t && t.hisowerRows;
+    estado.rows = (h && h.rows) || [];
+    estado.capturedAt = (h && h.capturedAt) || null;
+    estado.operadores = (t && t.operadores && t.operadores.lista) || [];
+    var mapa = {};
+    ((t && t.separacao) || []).forEach(function (doc) {
+      if (doc.chaveOriginal) mapa[doc.chaveOriginal] = doc;
+    });
+    estado.separacao = mapa;
+    render();
+    if (E.AdminShell) E.AdminShell.atualizarBadgeComDados(estado.rows, estado.separacao);
+  }
+
   function carregar() {
     if (usaFirestore()) {
+      // Pinta na hora com o último dado bom, pra a tela não ficar em branco.
+      if (!jaCarregouOk) aplicar(E.Db.cacheOuDemo());
       E.Db.getTudo().then(function (t) {
-        var r = [t.hisowerRows, t.operadores, t.separacao];
-        estado.rows = (r[0] && r[0].rows) || [];
-        estado.capturedAt = (r[0] && r[0].capturedAt) || null;
-        estado.operadores = (r[1] && r[1].lista) || [];
-        var mapa = {};
-        (r[2] || []).forEach(function (doc) {
-          if (doc.chaveOriginal) mapa[doc.chaveOriginal] = doc;
-        });
-        estado.separacao = mapa;
-        render();
-        if (E.AdminShell) E.AdminShell.atualizarBadgeComDados(estado.rows, estado.separacao);
-      }).catch(function (e) {
+        jaCarregouOk = true;
+        aplicar(t);
+      }).catch(function () {
+        // Mantém o que está na tela; só sinaliza que não atualizou agora.
         metaInfo.textContent = "Sem conexão com o banco — tente novamente em instantes.";
       });
     } else {
-      try {
-        var demo = JSON.parse(localStorage.getItem("exp_demo") || "{}");
-        estado.rows = demo.hisowerRows || [];
-        estado.separacao = demo.separacao || {};
-        estado.operadores = demo.operadores || [];
-        estado.capturedAt = demo.capturedAt || null;
-      } catch (e) { /* ignore */ }
-      render();
-      if (E.AdminShell) E.AdminShell.atualizarBadgeComDados(estado.rows, estado.separacao);
+      aplicar(E.Db.cacheOuDemo());
     }
   }
 
@@ -2465,7 +2540,7 @@ window.EXP_SHEETS_CONFIG = {
   function ativar() { carregar(); intervalId = setInterval(carregar, 30000); }
   function desativar() { if (intervalId) { clearInterval(intervalId); intervalId = null; } }
   window.Exp.AdminViews = window.Exp.AdminViews || {};
-  window.Exp.AdminViews.distribuicao = { ativar: ativar, desativar: desativar };
+  window.Exp.AdminViews.distribuicao = { ativar: ativar, desativar: desativar, recarregar: carregar };
 })();
 </script>
 
@@ -2487,32 +2562,31 @@ window.EXP_SHEETS_CONFIG = {
     return !!(E.Db && E.Db.temConfig());
   }
 
-  function carregar() {
-    if (usaFirestore()) {
-      E.Db.getTudo().then(function (t) {
-        var r = [t.hisowerRows, t.separacao];
-        var rows = (r[0] && r[0].rows) || [];
-        var mapa = {};
-        (r[1] || []).forEach(function (doc) { if (doc.chaveOriginal) mapa[doc.chaveOriginal] = doc; });
-        jaCarregouOk = true;
-        render(rows, mapa, (r[0] && r[0].capturedAt) || null);
-        if (E.AdminShell) E.AdminShell.atualizarBadgeComDados(rows, mapa);
-      }).catch(function () {
-        // Mantém o último dado bom na tela em vez de zerar (ver painel).
-        if (!jaCarregouOk) carregarDemo();
-      });
-    } else {
-      carregarDemo();
-    }
-  }
-
   var jaCarregouOk = false;
 
-  function carregarDemo() {
-    var demo = {};
-    try { demo = JSON.parse(localStorage.getItem("exp_demo") || "{}"); } catch (e) { /* ignore */ }
-    render(demo.hisowerRows || [], demo.separacao || {}, demo.capturedAt || null);
-    if (E.AdminShell) E.AdminShell.atualizarBadgeComDados(demo.hisowerRows || [], demo.separacao || {});
+  // Aplica um payload no formato do getTudo (o cache tem o mesmo formato).
+  function aplicar(t) {
+    var h = t && t.hisowerRows;
+    var rows = (h && h.rows) || [];
+    var mapa = {};
+    ((t && t.separacao) || []).forEach(function (doc) { if (doc.chaveOriginal) mapa[doc.chaveOriginal] = doc; });
+    render(rows, mapa, (h && h.capturedAt) || null);
+    if (E.AdminShell) E.AdminShell.atualizarBadgeComDados(rows, mapa);
+  }
+
+  function carregar() {
+    if (usaFirestore()) {
+      // Pinta na hora com o último dado bom, pra a tela não ficar em branco.
+      if (!jaCarregouOk) aplicar(E.Db.cacheOuDemo());
+      E.Db.getTudo().then(function (t) {
+        jaCarregouOk = true;
+        aplicar(t);
+      }).catch(function () {
+        // Mantém o que está na tela em vez de zerar (ver painel).
+      });
+    } else {
+      aplicar(E.Db.cacheOuDemo());
+    }
   }
 
   function render(rows, separacao, capturedAt) {
@@ -2536,38 +2610,65 @@ window.EXP_SHEETS_CONFIG = {
       if (c._c.status !== E.STATUS.CARREGADO) return true;
       return E.mesmoDia(c._c.desde, hoje);
     });
+    // No Resumo a separação antecipada NÃO é uma linha própria: é contada
+    // dentro de "Em separação" (é separação, só adiantada) e o que a distingue
+    // vira uma observação abaixo da tabela. A aba "Separação antecipada" do
+    // Painel continua existindo pra quem precisa ver quais são.
     var contagem = {};
-    // "c/ pendência" é um SUBCONJUNTO de contagem. Cada carga tem exatamente
-    // um status, então a coluna Quantidade continua somando o Total exato — a
-    // de pendência nunca deve ser somada a ela, só lida como "destas, quantas
-    // estão irregulares".
-    var pendentes = {};
-    E.STATUS_META.forEach(function (m) { contagem[m.key] = 0; pendentes[m.key] = 0; });
+    E.STATUS_META.forEach(function (m) { contagem[m.key] = 0; });
     visiveis.forEach(function (c) {
-      contagem[c._c.status] = (contagem[c._c.status] || 0) + 1;
-      if (c._flags && c._flags.temPendencia) {
-        pendentes[c._c.status] = (pendentes[c._c.status] || 0) + 1;
-      }
+      var chave = c._c.status === E.STATUS.SEPARACAO_ANTECIPADA
+        ? E.STATUS.EM_SEPARACAO
+        : c._c.status;
+      contagem[chave] = (contagem[chave] || 0) + 1;
     });
-    var totalPendentes = visiveis.filter(function (c) {
-      return c._flags && c._flags.temPendencia;
-    }).length;
 
     corpoStatus.innerHTML = "";
     E.STATUS_META.forEach(function (m) {
+      if (m.key === E.STATUS.SEPARACAO_ANTECIPADA) return; // somada em "Em separação"
       var tr = document.createElement("tr");
-      var p = pendentes[m.key] || 0;
       tr.innerHTML =
         "<td><span class=\"status-dot\" style=\"background:" + m.color + "\"></span>" + esc(m.key) + "</td>" +
         "<td class=\"num\">" + fmtNum(contagem[m.key] || 0) + "</td>" +
-        "<td class=\"num" + (p > 0 ? " nivel-amarelo" : "") + "\">" + (p > 0 ? fmtNum(p) : "—") + "</td>";
+        "<td class=\"obs-celula\">" + obsDoStatus(visiveis, m.key) + "</td>";
       corpoStatus.appendChild(tr);
     });
     var trTotal = document.createElement("tr");
     trTotal.className = "total-row";
-    trTotal.innerHTML = "<td>Total</td><td class=\"num\">" + fmtNum(visiveis.length) + "</td>" +
-      "<td class=\"num\">" + (totalPendentes > 0 ? fmtNum(totalPendentes) : "—") + "</td>";
+    trTotal.innerHTML = "<td>Total</td><td class=\"num\">" + fmtNum(visiveis.length) + "</td><td></td>";
     corpoStatus.appendChild(trTotal);
+  }
+
+  // Nota curta ao lado da quantidade, dizendo QUAL é a pendência. Aparece em
+  // "Em separação" (onde a separação antecipada foi somada) e em "Aguardando
+  // Carregamento" (carga separada antecipadamente que já terminou e segue
+  // irregular). Fica vazia quando não há nada pendente.
+  //
+  // As categorias são exclusivas — "sem veículo" tem precedência quando os
+  // dois faltam, porque sem o caminhão a ordem é o problema menor. Assim a
+  // soma das notas bate com a quantidade de cargas irregulares, e o texto
+  // fica curto ("1 sem ordem" em vez de uma frase).
+  function obsDoStatus(visiveis, statusKey) {
+    var alvo;
+    if (statusKey === E.STATUS.EM_SEPARACAO) {
+      alvo = visiveis.filter(function (c) { return c._c.status === E.STATUS.SEPARACAO_ANTECIPADA; });
+    } else if (statusKey === E.STATUS.AGUARDANDO_CARREGAMENTO) {
+      alvo = visiveis.filter(function (c) {
+        return c._c.status === E.STATUS.AGUARDANDO_CARREGAMENTO && c._flags && c._flags.temPendencia;
+      });
+    } else {
+      return "";
+    }
+    if (!alvo.length) return "";
+
+    var semVeiculo = alvo.filter(function (c) { return c._flags.veiculoNaoChegou; }).length;
+    var semOrdem = alvo.length - semVeiculo;
+
+    var partes = [];
+    if (semVeiculo) partes.push(fmtNum(semVeiculo) + " sem veículo");
+    if (semOrdem) partes.push(fmtNum(semOrdem) + " sem ordem");
+    return '<span class="obs-tag" title="Cargas separadas de forma antecipada: veículo ainda não chegou na portaria, ou ordem ainda não finalizada no Hisower.">' +
+      esc(partes.join(" · ")) + "</span>";
   }
 
   function renderDiaria(cargas, hoje) {
@@ -2605,7 +2706,7 @@ window.EXP_SHEETS_CONFIG = {
   var intervalId = null;
   function ativar() { carregar(); intervalId = setInterval(carregar, 30000); }
   function desativar() { if (intervalId) { clearInterval(intervalId); intervalId = null; } }
-  window.Exp.AdminViews.resumo = { ativar: ativar, desativar: desativar };
+  window.Exp.AdminViews.resumo = { ativar: ativar, desativar: desativar, recarregar: carregar };
 })();
 </script>
 
@@ -2658,30 +2759,29 @@ window.EXP_SHEETS_CONFIG = {
     return !!(E.Db && E.Db.temConfig());
   }
 
-  function carregar() {
-    if (usaFirestore()) {
-      E.Db.getTudo().then(function (t) {
-        var r = [t.hisowerRows, t.operadores, t.separacao];
-        var rows = (r[0] && r[0].rows) || [];
-        var mapa = {};
-        (r[2] || []).forEach(function (doc) { if (doc.chaveOriginal) mapa[doc.chaveOriginal] = doc; });
-        jaCarregouOk = true;
-        render(rows, mapa, (r[1] && r[1].lista) || [], (r[0] && r[0].capturedAt) || null);
-        if (E.AdminShell) E.AdminShell.atualizarBadgeComDados(rows, mapa);
-      }).catch(function () {
-        // Mantém o último dado bom na tela em vez de zerar (ver painel).
-        if (!jaCarregouOk) carregarDemo();
-      });
-    } else {
-      carregarDemo();
-    }
+  // Aplica um payload no formato do getTudo (o cache tem o mesmo formato).
+  function aplicar(t) {
+    var h = t && t.hisowerRows;
+    var rows = (h && h.rows) || [];
+    var mapa = {};
+    ((t && t.separacao) || []).forEach(function (doc) { if (doc.chaveOriginal) mapa[doc.chaveOriginal] = doc; });
+    render(rows, mapa, (t && t.operadores && t.operadores.lista) || [], (h && h.capturedAt) || null);
+    if (E.AdminShell) E.AdminShell.atualizarBadgeComDados(rows, mapa);
   }
 
-  function carregarDemo() {
-    var demo = {};
-    try { demo = JSON.parse(localStorage.getItem("exp_demo") || "{}"); } catch (e) { /* ignore */ }
-    render(demo.hisowerRows || [], demo.separacao || {}, demo.operadores || [], demo.capturedAt || null);
-    if (E.AdminShell) E.AdminShell.atualizarBadgeComDados(demo.hisowerRows || [], demo.separacao || {});
+  function carregar() {
+    if (usaFirestore()) {
+      // Pinta na hora com o último dado bom, pra a tela não ficar em branco.
+      if (!jaCarregouOk) aplicar(E.Db.cacheOuDemo());
+      E.Db.getTudo().then(function (t) {
+        jaCarregouOk = true;
+        aplicar(t);
+      }).catch(function () {
+        // Mantém o que está na tela em vez de zerar (ver painel).
+      });
+    } else {
+      aplicar(E.Db.cacheOuDemo());
+    }
   }
 
   function render(rows, separacao, operadoresRoster, capturedAt) {
@@ -3009,7 +3109,7 @@ window.EXP_SHEETS_CONFIG = {
   var intervalId = null;
   function ativar() { carregar(); intervalId = setInterval(carregar, 30000); }
   function desativar() { if (intervalId) { clearInterval(intervalId); intervalId = null; } }
-  window.Exp.AdminViews.desempenho = { ativar: ativar, desativar: desativar };
+  window.Exp.AdminViews.desempenho = { ativar: ativar, desativar: desativar, recarregar: carregar };
   // Exposto pra tela do operador reusar o mesmo gráfico de colunas (Turno 1
   // x Turno 2 e "minhas cargas por dia") sem duplicar o código de SVG.
   window.Exp.svgColunasAgrupadas = svgColunasAgrupadas;
@@ -3060,8 +3160,17 @@ window.EXP_SHEETS_CONFIG = {
     badgeDistribuicao.hidden = pendentes === 0;
   }
 
+  // Refaz a busca da aba que está aberta (botão "Atualizar" do topo). Não usa
+  // ativarAba de novo de propósito: aquilo recria o setInterval e acabaria
+  // duplicando o polling a cada clique.
+  function recarregarAtual() {
+    var v = abaAtual && E.AdminViews[abaAtual];
+    if (v && v.recarregar) v.recarregar();
+  }
+
   window.Exp.AdminShell = {
     ativarAba: ativarAba,
+    recarregarAtual: recarregarAtual,
     atualizarBadgeComDados: atualizarBadgeComDados
   };
 })();
@@ -3113,30 +3222,37 @@ window.EXP_SHEETS_CONFIG = {
     statusBanner.className = "status-banner" + (offline ? " offline" : "");
   }
 
+  var jaCarregouOk = false;
+
+  // Aplica um payload no formato do getTudo (o cache tem o mesmo formato).
+  function aplicar(t) {
+    var h = t && t.hisowerRows;
+    estado.rows = (h && h.rows) || [];
+    estado.operadores = (t && t.operadores && t.operadores.lista) || [];
+    var mapa = {};
+    ((t && t.separacao) || []).forEach(function (doc) {
+      if (doc.chaveOriginal) mapa[doc.chaveOriginal] = doc;
+    });
+    estado.separacao = mapa;
+  }
+
   function carregar(cb) {
     if (usaFirestore()) {
+      // Pinta na hora com o último dado bom guardado no aparelho: o operador
+      // abre o app e já vê as cargas dele, em vez de tela vazia enquanto o
+      // Apps Script responde.
+      if (!jaCarregouOk) aplicar(E.Db.cacheOuDemo());
       E.Db.getTudo().then(function (t) {
-        var r = [t.hisowerRows, t.operadores, t.separacao];
-        estado.rows = (r[0] && r[0].rows) || [];
-        estado.operadores = (r[1] && r[1].lista) || [];
-        var mapa = {};
-        (r[2] || []).forEach(function (doc) {
-          if (doc.chaveOriginal) mapa[doc.chaveOriginal] = doc;
-        });
-        estado.separacao = mapa;
+        jaCarregouOk = true;
+        aplicar(t);
         mostrarBanner(null);
         if (cb) cb();
-      }).catch(function (e) {
+      }).catch(function () {
         mostrarBanner("Sem conexão com o banco — mostrando últimos dados salvos.", true);
         if (cb) cb();
       });
     } else {
-      try {
-        var demo = JSON.parse(localStorage.getItem("exp_demo") || "{}");
-        estado.rows = demo.hisowerRows || [];
-        estado.separacao = demo.separacao || {};
-        estado.operadores = demo.operadores || [];
-      } catch (e) { /* ignore */ }
+      aplicar(E.Db.cacheOuDemo());
       mostrarBanner("Modo demo local — configure o Firebase para dados reais.", false);
       if (cb) cb();
     }
@@ -3388,6 +3504,27 @@ window.EXP_SHEETS_CONFIG = {
     if (e.key === "Enter") tentarLogin();
   });
   btnSairGlobal.addEventListener("click", sair);
+
+  // "Atualizar": busca dados novos sem recarregar a página (recarregar do
+  // navegador descarta a tela inteira e demora). Desabilita durante a busca
+  // pra não empilhar requisições no Apps Script, que já enfileira o excesso.
+  var btnAtualizar = document.getElementById("btnAtualizar");
+  btnAtualizar.addEventListener("click", function () {
+    btnAtualizar.disabled = true;
+    var sessao = sessaoAtual();
+    if (sessao && sessao.tipo === "admin") {
+      if (E.AdminShell) E.AdminShell.recarregarAtual();
+      // As telas do admin não avisam quando terminam; libera junto com a
+      // faixa de carregamento, que já conta as requisições em voo.
+      setTimeout(function () { btnAtualizar.disabled = false; }, 2000);
+    } else {
+      carregar(function () {
+        renderCargas();
+        renderMeuDesempenho();
+        btnAtualizar.disabled = false;
+      });
+    }
+  });
 
   function init() {
     telaCarregandoSessao.hidden = true;
