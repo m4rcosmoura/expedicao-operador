@@ -145,6 +145,51 @@ tbody tr:nth-child(even) { background: var(--stripe); }
 .selo-turno--2 { background: #2a78d6; color: #ffffff; }
 .selo-turno:hover { filter: brightness(1.1); }
 
+/* ---- Cadastro de operadores (tabela com edição na própria linha) ---- */
+.tabela-operadores { width: 100%; border-collapse: collapse; margin-bottom: 12px; }
+.tabela-operadores thead th {
+  text-align: left; padding: 6px 10px;
+  font-size: var(--fs-label); font-weight: 700; letter-spacing: .04em;
+  text-transform: uppercase; color: var(--txt-faint);
+  background: transparent; border-bottom: 1px solid var(--line);
+}
+.tabela-operadores thead th:last-child { text-align: right; }
+.tabela-operadores td {
+  padding: 7px 10px; border-bottom: 1px solid var(--line);
+  font-size: var(--fs-body); vertical-align: middle;
+}
+.tabela-operadores tr:last-child td { border-bottom: none; }
+.tabela-operadores input[type="text"] {
+  font-family: inherit; font-size: var(--fs-small); padding: 5px 8px;
+  border: 1px solid var(--line); border-radius: 6px; color: var(--txt);
+  background: var(--surface); width: 100%; max-width: 180px;
+}
+.tabela-operadores input:focus, .tabela-operadores select:focus { outline: none; border-color: var(--navy); }
+
+/* PIN nunca fica à mostra na listagem — a tela fica visível no galpão. */
+.pin-oculto { color: var(--txt-faint); letter-spacing: .18em; }
+
+.acoes-operador { text-align: right; white-space: nowrap; }
+.acoes-operador button { margin-left: 6px; }
+
+/* Operador inativado: some dos seletores de atribuição, mas continua listado
+   (e com o histórico intacto), então precisa ficar visualmente distinto. */
+.operador-inativo td { color: var(--txt-faint); }
+.operador-inativo .selo-turno { opacity: .5; }
+.selo-inativo {
+  margin-left: 8px; padding: 2px 7px; border-radius: 999px;
+  background: var(--line); color: var(--txt-dim);
+  font-size: 10px; font-weight: 800; letter-spacing: .03em; text-transform: uppercase;
+}
+.operador-editando td { background: var(--navy-tint); }
+.btn-salvar {
+  font-family: inherit; font-size: var(--fs-small); font-weight: 700; cursor: pointer;
+  padding: 5px 12px; border-radius: 6px; border: 1px solid var(--navy);
+  background: var(--navy); color: #ffffff;
+}
+.btn-salvar:hover { filter: brightness(1.15); }
+.vazio-inline { padding: 14px 0; color: var(--txt-faint); font-size: var(--fs-small); }
+
 .form-operador { display: flex; gap: 8px; flex-wrap: wrap; }
 .form-operador input, .form-operador select {
   flex: 1; min-width: 200px; font-size: var(--fs-body); padding: 8px 12px;
@@ -308,6 +353,22 @@ td.num { font-variant-numeric: tabular-nums; white-space: nowrap; font-weight: 5
 td.nivel-amarelo { color: #9a6400; font-weight: 700; }
 td.nivel-vermelho { color: #c62828; font-weight: 700; }
 
+/* Carga separada de forma antecipada que chegou em "Aguardando Carregamento"
+   ainda com pendência. Aplicado no td, não no tr, pra vencer o zebra
+   "tbody tr:nth-child(even)". */
+tbody tr.linha-pendencia td { background: #fff8e1; }
+tbody tr.linha-pendencia td:first-child { box-shadow: inset 3px 0 0 #b26a00; }
+
+.pendencia-tag {
+  font-size: var(--fs-small); font-weight: 700; color: #9a6400; white-space: nowrap;
+}
+/* Pendência no card do operador (tela do celular). */
+.card-pendencia {
+  margin-top: 6px; padding: 5px 9px; border-radius: 6px;
+  background: #fff8e1; color: #9a6400;
+  font-size: var(--fs-small); font-weight: 700;
+}
+
 /* ---- resumo.css extra (Resumo) ---- */
 .status-dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 8px; }
 .tabela-wrap--diaria table { width: auto; min-width: 0; }
@@ -429,11 +490,13 @@ td.nivel-vermelho { color: #c62828; font-weight: 700; }
           <th>Status</th>
           <th>Placa</th>
           <th id="pnlThOperador" hidden>Operador</th>
+          <th id="pnlThPendencia" hidden>Situação</th>
           <th>Empresa</th>
           <th>Cultura</th>
           <th>Entrou na Portaria</th>
           <th class="num">Duração</th>
           <th class="num">Duração total</th>
+          <th id="pnlThAcao" hidden></th>
         </tr>
       </thead>
       <tbody id="pnlCorpo"></tbody>
@@ -449,7 +512,13 @@ td.nivel-vermelho { color: #c62828; font-weight: 700; }
     <section class="bloco">
       <h2>Operadores</h2>
       <div class="operadores-card">
-        <div id="listaOperadores" class="chips-operadores"></div>
+        <table class="tabela-operadores">
+          <thead>
+            <tr><th>Nome</th><th>PIN</th><th>Turno</th><th></th></tr>
+          </thead>
+          <tbody id="listaOperadores"></tbody>
+        </table>
+        <div id="vazioOperadores" class="vazio-inline" hidden>Nenhum operador cadastrado.</div>
         <form id="formOperador" class="form-operador">
           <input id="inputOperador" type="text" placeholder="Nome do operador" maxlength="40" />
           <input id="inputPin" type="text" inputmode="numeric" pattern="[0-9]*" placeholder="PIN (4 dígitos)" maxlength="4" class="input-pin" />
@@ -564,7 +633,7 @@ td.nivel-vermelho { color: #c62828; font-weight: 700; }
     <h2>Cargas por status</h2>
     <div class="tabela-wrap">
       <table>
-        <thead><tr><th>Status</th><th class="num">Quantidade</th></tr></thead>
+        <thead><tr><th>Status</th><th class="num">Quantidade</th><th class="num" title="Subconjunto da quantidade — cargas com veículo não chegado ou ordem não finalizada. Nunca somar com a coluna Quantidade.">c/ pendência</th></tr></thead>
         <tbody id="rsmCorpoStatus"></tbody>
       </table>
     </div>
@@ -756,6 +825,7 @@ window.EXP_SHEETS_CONFIG = {
   var STATUS = {
     AGUARDANDO_ORDEM: "Aguardando ordem",
     AGUARDANDO_SEPARACAO: "Aguardando Separação",
+    SEPARACAO_ANTECIPADA: "Separação antecipada",
     EM_SEPARACAO: "Em separação",
     AGUARDANDO_CARREGAMENTO: "Aguardando Carregamento",
     EM_CARREGAMENTO: "Em carregamento",
@@ -767,6 +837,7 @@ window.EXP_SHEETS_CONFIG = {
   var STATUS_META = [
     { key: STATUS.AGUARDANDO_ORDEM, color: "#d32f2f" },
     { key: STATUS.AGUARDANDO_SEPARACAO, color: "#e65100" },
+    { key: STATUS.SEPARACAO_ANTECIPADA, color: "#b26a00" },
     { key: STATUS.EM_SEPARACAO, color: "#8a6d00" },
     { key: STATUS.AGUARDANDO_CARREGAMENTO, color: "#0277bd" },
     { key: STATUS.EM_CARREGAMENTO, color: "#5e35b1" },
@@ -889,7 +960,11 @@ window.EXP_SHEETS_CONFIG = {
     var placa = (g[0].placa || "").trim().toUpperCase();
     var entrouRaw = (g[0].entrouPortaria || "").trim();
 
-    var ordemAll = antecipada || g.every(function (r) { return isFilled(r.ordemMontadaEm); });
+    // "Real" = o que o Hisower diz de fato, sem a exceção da antecipada. É o
+    // que permite dizer se a pendência é "ordem não finalizada" mesmo numa
+    // carga já marcada como antecipada — antes esse dado se perdia.
+    var ordemAllReal = g.every(function (r) { return isFilled(r.ordemMontadaEm); });
+    var ordemAll = antecipada || ordemAllReal;
     var carregInicioAny = g.some(function (r) { return isFilled(r.inicioCarregEm); });
     var carregFimAll = g.every(function (r) { return isFilled(r.terminoCarregEm); });
 
@@ -909,6 +984,19 @@ window.EXP_SHEETS_CONFIG = {
     var sepInicioTs = sep && isFilled(sep.inicioEm) ? new Date(sep.inicioEm) : null;
     var sepFimTs = sep && isFilled(sep.fimEm) ? new Date(sep.fimEm) : null;
 
+    // Pendências que impedem a carga de estar formalmente pronta pra separar.
+    // As duas são independentes e podem coexistir.
+    var entrouPortariaTs = parseBR(entrouRaw);
+    var veiculoNaoChegou = !entrouPortariaTs;
+    var ordemNaoFinalizada = !ordemAllReal;
+    var temPendencia = veiculoNaoChegou || ordemNaoFinalizada;
+
+    // A carga foi marcada pra separação antecipada? Cobre os três caminhos:
+    // a chave "PEND:" (formulário "Adiantar separação"), a carga de chave real
+    // que recebeu operador direto em "Aguardando ordem", e a que o operador já
+    // começou a separar.
+    var marcadaAntecipada = antecipada || !!(sep && sep.operador) || !!sepInicioTs;
+
     var carga = {
       chave: chave,
       placa: placa,
@@ -918,7 +1006,7 @@ window.EXP_SHEETS_CONFIG = {
       cultura: distinctConcat(g.map(function (r) { return culturaDe(r.safra); })) || "—",
       cliente: distinctConcat(clientes),
       entrouPortaria: entrouRaw,
-      entrouPortariaTs: parseBR(entrouRaw),
+      entrouPortariaTs: entrouPortariaTs,
       linhas: g.length,
       operador: sep && sep.operador ? sep.operador : null,
       qtdParaCarregar: sum(g, "qtdParaCarregar"),
@@ -928,26 +1016,62 @@ window.EXP_SHEETS_CONFIG = {
       sc40kg: sum(g, "sc40kg"),
       _flags: {
         ordemAll: ordemAll,
+        ordemAllReal: ordemAllReal,
         carregInicioAny: carregInicioAny,
         carregFimAll: carregFimAll,
         ordemMontadaTs: ordemMontadaTs,
         inicioCarregTs: inicioCarregTs,
         terminoCarregTs: terminoCarregTs,
         sepInicioTs: sepInicioTs,
-        sepFimTs: sepFimTs
+        sepFimTs: sepFimTs,
+        veiculoNaoChegou: veiculoNaoChegou,
+        ordemNaoFinalizada: ordemNaoFinalizada,
+        temPendencia: temPendencia,
+        marcadaAntecipada: marcadaAntecipada
       }
     };
     return carga;
   }
 
+  // "Separação antecipada" é a separação feita antes de a carga estar
+  // formalmente pronta (veículo não chegou ou ordem não montada). Só vale
+  // enquanto a pendência existe: resolvida no meio da separação, a carga vira
+  // "Em separação" normal. Finalizada, segue pra "Aguardando Carregamento"
+  // como qualquer outra — a pendência remanescente é sinalizada na tela, não
+  // no status, pra as contagens continuarem somando o total exato.
   function statusDe(carga) {
     var f = carga._flags;
     if (f.carregFimAll) return { status: STATUS.CARREGADO, desde: f.terminoCarregTs };
     if (f.carregInicioAny) return { status: STATUS.EM_CARREGAMENTO, desde: f.inicioCarregTs };
     if (f.sepFimTs) return { status: STATUS.AGUARDANDO_CARREGAMENTO, desde: f.sepFimTs };
-    if (f.sepInicioTs) return { status: STATUS.EM_SEPARACAO, desde: f.sepInicioTs };
-    if (f.ordemAll) return { status: STATUS.AGUARDANDO_SEPARACAO, desde: f.ordemMontadaTs };
+    if (f.sepInicioTs) {
+      return f.temPendencia
+        ? { status: STATUS.SEPARACAO_ANTECIPADA, desde: f.sepInicioTs }
+        : { status: STATUS.EM_SEPARACAO, desde: f.sepInicioTs };
+    }
+    if (!f.temPendencia) return { status: STATUS.AGUARDANDO_SEPARACAO, desde: f.ordemMontadaTs };
+    if (f.marcadaAntecipada) return { status: STATUS.SEPARACAO_ANTECIPADA, desde: null };
     return { status: STATUS.AGUARDANDO_ORDEM, desde: carga.entrouPortariaTs };
+  }
+
+  // Operador inativado continua no cadastro (e no histórico de desempenho),
+  // mas não recebe carga nova nem consegue entrar no app. Vazio/ausente conta
+  // como ativo — cadastros feitos antes da coluna "ativo" existir não têm esse
+  // campo e precisam seguir funcionando.
+  function operadorAtivo(o) {
+    if (!o) return false;
+    return !(o.ativo === "0" || o.ativo === 0 || o.ativo === false);
+  }
+
+  // Texto da pendência pra exibição ("onde a carga está"). As duas podem
+  // coexistir; "—" quando a carga está regular.
+  function pendenciasTexto(carga) {
+    var f = carga && carga._flags;
+    if (!f) return "—";
+    var partes = [];
+    if (f.veiculoNaoChegou) partes.push("Veículo não chegou");
+    if (f.ordemNaoFinalizada) partes.push("Ordem não finalizada");
+    return partes.length ? partes.join(" · ") : "—";
   }
 
   function computar(carga, agora) {
@@ -1173,6 +1297,8 @@ window.EXP_SHEETS_CONFIG = {
     placaDaChave: placaDaChave,
     agregar: agregar,
     computar: computar,
+    pendenciasTexto: pendenciasTexto,
+    operadorAtivo: operadorAtivo,
     fmtDur: fmtDur,
     corStatus: corStatus,
     ordemStatus: ordemStatus,
@@ -1310,7 +1436,7 @@ window.EXP_SHEETS_CONFIG = {
 
   var E = window.Exp;
   window.Exp.AdminViews = window.Exp.AdminViews || {};
-  var estado = { rows: [], separacao: {}, capturedAt: null, filtro: null };
+  var estado = { rows: [], separacao: {}, operadores: [], capturedAt: null, filtro: null };
 
   var corpo = document.getElementById("pnlCorpo");
   var vazio = document.getElementById("pnlVazio");
@@ -1318,6 +1444,12 @@ window.EXP_SHEETS_CONFIG = {
   var filtros = document.getElementById("pnlFiltros");
   var alerta = document.getElementById("pnlAlerta");
   var thOperador = document.getElementById("pnlThOperador");
+  var thPendencia = document.getElementById("pnlThPendencia");
+  var thAcao = document.getElementById("pnlThAcao");
+
+  // Já houve pelo menos uma leitura bem-sucedida? Usado pra não trocar dados
+  // bons por vazio quando uma leitura falha (ver o catch em carregar()).
+  var jaCarregouOk = false;
 
   function usaFirestore() {
     return !!(E.Db && E.Db.temConfig());
@@ -1332,6 +1464,7 @@ window.EXP_SHEETS_CONFIG = {
       var demo = JSON.parse(localStorage.getItem("exp_demo") || "{}");
       estado.rows = demo.hisowerRows || [];
       estado.separacao = demo.separacao || {};
+      estado.operadores = demo.operadores || [];
       estado.capturedAt = demo.capturedAt || null;
     } catch (e) { /* ignore */ }
     render();
@@ -1344,17 +1477,128 @@ window.EXP_SHEETS_CONFIG = {
         var r = [t.hisowerRows, t.separacao];
         estado.rows = (r[0] && r[0].rows) || [];
         estado.capturedAt = (r[0] && r[0].capturedAt) || null;
+        // Operadores vêm no mesmo getTudo — necessários pro seletor de
+        // atribuição da aba "Aguardando ordem".
+        estado.operadores = (t.operadores && t.operadores.lista) || [];
         var mapa = {};
         (r[1] || []).forEach(function (doc) { if (doc.chaveOriginal) mapa[doc.chaveOriginal] = doc; });
         estado.separacao = mapa;
         alerta.hidden = !(r[0] && r[0].erroCaptura);
         alerta.textContent = (r[0] && r[0].erroCaptura) || "";
+        jaCarregouOk = true;
         render();
         avisarBadge();
-      }).catch(carregarDemo);
+      }).catch(function () {
+        // Falha de leitura (rede instável, Apps Script enfileirado): mantém na
+        // tela o último dado bom em vez de zerar tudo. Sem isso, uma falha
+        // transitória do polling caía no modo demo — que aqui é vazio — e a
+        // tela mostrava "0 cargas" como se não houvesse nada.
+        if (!jaCarregouOk) carregarDemo();
+      });
     } else {
       carregarDemo();
     }
+  }
+
+  // ---- Atribuição de operador direto do Painel ----
+  // Mesma gravação da tela de Distribuição; duplicada porque cada tela roda
+  // isolada, e o Painel precisa escrever pra permitir adiantar a separação já
+  // na aba "Aguardando ordem".
+
+  function dadosParaFirestore(chave, dados) {
+    var limpo = Object.assign({}, dados);
+    delete limpo._id;
+    delete limpo.chaveOriginal;
+    limpo.chaveOriginal = chave;
+    return limpo;
+  }
+
+  function persistirSeparacaoCarga(chave, patch) {
+    var atual = estado.separacao[chave] || {};
+
+    // Reconciliação da separação antecipada: promove os campos da chave
+    // "PEND:placa" na primeira gravação sob a chave real, senão o operador e o
+    // horário de início se perderiam quando a carga ganha entrada na portaria.
+    var chaveOrfa = null;
+    if (Object.keys(atual).length === 0 && !E.ehChavePendente(chave)) {
+      var candidata = E.chavePendente(E.placaDaChave(chave));
+      if (estado.separacao[candidata]) {
+        atual = Object.assign({}, estado.separacao[candidata]);
+        chaveOrfa = candidata;
+      }
+    }
+
+    var novo = Object.assign({}, estado.separacao);
+    novo[chave] = Object.assign({}, atual, patch);
+    if (chaveOrfa) delete novo[chaveOrfa];
+    estado.separacao = novo;
+
+    if (usaFirestore()) {
+      E.Db.setDoc("separacao", E.Db.chaveParaDocId(chave), dadosParaFirestore(chave, novo[chave]), { merge: true })
+        .catch(function (e) { console.warn("Falha ao gravar separação:", e); });
+      if (chaveOrfa) {
+        E.Db.deleteDoc("separacao", E.Db.chaveParaDocId(chaveOrfa))
+          .catch(function (e) { console.warn("Falha ao apagar separação antecipada antiga:", e); });
+      }
+    } else {
+      try {
+        var demo = JSON.parse(localStorage.getItem("exp_demo") || "{}");
+        demo.separacao = novo;
+        localStorage.setItem("exp_demo", JSON.stringify(demo));
+      } catch (e) { /* ignore */ }
+    }
+
+    render();
+    avisarBadge();
+  }
+
+  function selecionarOperador(chave, onEscolher) {
+    var sel = document.createElement("select");
+    sel.className = "sel-operador";
+    var optVazia = document.createElement("option");
+    optVazia.value = "";
+    optVazia.textContent = "Adiantar com…";
+    sel.appendChild(optVazia);
+    estado.operadores.forEach(function (o) {
+      var opt = document.createElement("option");
+      opt.value = o.nome;
+      opt.textContent = o.nome;
+      sel.appendChild(opt);
+    });
+    sel.addEventListener("change", function () {
+      if (sel.value) onEscolher(sel.value);
+    });
+    return sel;
+  }
+
+  // Sem operador: seletor pra adiantar. Com operador: seletor (trocar) +
+  // "Remover". Sem ninguém cadastrado, avisa em vez de um seletor vazio.
+  function controleAcao(c) {
+    var wrap = document.createElement("span");
+    if (!estado.operadores.length) {
+      wrap.className = "aviso-inline";
+      wrap.textContent = "cadastre um operador em Distribuição";
+      return wrap;
+    }
+
+    var sel = selecionarOperador(c.chave, function (nome) {
+      persistirSeparacaoCarga(c.chave, { operador: nome });
+    });
+    if (c.operador) sel.title = "Trocar operador";
+    wrap.appendChild(sel);
+
+    if (c.operador) {
+      var btn = document.createElement("button");
+      btn.type = "button";
+      btn.className = "btn-remover";
+      btn.style.marginLeft = "8px";
+      btn.textContent = "Remover";
+      btn.addEventListener("click", function () {
+        persistirSeparacaoCarga(c.chave, { operador: null });
+      });
+      wrap.appendChild(btn);
+    }
+    return wrap;
   }
 
   function render() {
@@ -1385,11 +1629,24 @@ window.EXP_SHEETS_CONFIG = {
       return ta - tb;
     });
 
-    var mostraOperador = estado.filtro === E.STATUS.AGUARDANDO_SEPARACAO || estado.filtro === E.STATUS.EM_SEPARACAO;
+    var mostraOperador = estado.filtro === E.STATUS.AGUARDANDO_SEPARACAO ||
+      estado.filtro === E.STATUS.SEPARACAO_ANTECIPADA ||
+      estado.filtro === E.STATUS.EM_SEPARACAO;
     thOperador.hidden = !mostraOperador;
 
+    // "Situação" = o que falta na carga. Só nas abas onde pode faltar algo.
+    var mostraPendencia = estado.filtro === E.STATUS.AGUARDANDO_ORDEM ||
+      estado.filtro === E.STATUS.SEPARACAO_ANTECIPADA ||
+      estado.filtro === E.STATUS.AGUARDANDO_CARREGAMENTO;
+    thPendencia.hidden = !mostraPendencia;
+
+    // Ação (atribuir / remover operador) só onde faz sentido adiantar.
+    var mostraAcao = estado.filtro === E.STATUS.AGUARDANDO_ORDEM ||
+      estado.filtro === E.STATUS.SEPARACAO_ANTECIPADA;
+    thAcao.hidden = !mostraAcao;
+
     corpo.innerHTML = "";
-    lista.forEach(function (c) { corpo.appendChild(linha(c, mostraOperador)); });
+    lista.forEach(function (c) { corpo.appendChild(linha(c, mostraOperador, mostraPendencia, mostraAcao)); });
 
     vazio.hidden = cargas.length > 0;
     metaInfo.textContent = cargas.length + " cargas" +
@@ -1417,9 +1674,16 @@ window.EXP_SHEETS_CONFIG = {
     return el;
   }
 
-  function linha(c, mostraOperador) {
+  function linha(c, mostraOperador, mostraPendencia, mostraAcao) {
     var tr = document.createElement("tr");
     var cor = E.corStatus(c._c.status);
+
+    // Carga separada de forma antecipada que chegou em "Aguardando
+    // Carregamento" ainda com pendência: mantém o status pra não bagunçar as
+    // contagens, e destaca a linha pra não passar batido no chão.
+    if (c._c.status === E.STATUS.AGUARDANDO_CARREGAMENTO && c._flags.temPendencia) {
+      tr.className = "linha-pendencia";
+    }
 
     var tdCarga = td('<span class="carga-web">' + esc(c.progWeb) + "</span>");
     var tdStatus = td('<span class="status-badge" style="background:' + cor + '">' + esc(c._c.status) + "</span>");
@@ -1427,6 +1691,12 @@ window.EXP_SHEETS_CONFIG = {
 
     var tdOperador = td(esc(c.operador || "—"));
     tdOperador.hidden = !mostraOperador;
+
+    var pend = E.pendenciasTexto(c);
+    var tdPendencia = td(
+      pend === "—" ? "—" : '<span class="pendencia-tag">' + esc(pend) + "</span>"
+    );
+    tdPendencia.hidden = !mostraPendencia;
 
     var empClass = "empresa-tag" +
       (c.empresa === "Basf" ? " empresa-basf" : c.empresa === "Multiplicação" ? " empresa-multiplicacao" : "");
@@ -1449,7 +1719,11 @@ window.EXP_SHEETS_CONFIG = {
       "num" + (nivelTotal ? " nivel-" + nivelTotal : "")
     );
 
-    [tdCarga, tdStatus, tdPlaca, tdOperador, tdEmpresa, tdCultura, tdEntrou, tdDuracao, tdTotal].forEach(function (x) {
+    var tdAcao = td("");
+    tdAcao.hidden = !mostraAcao;
+    if (mostraAcao) tdAcao.appendChild(controleAcao(c));
+
+    [tdCarga, tdStatus, tdPlaca, tdOperador, tdPendencia, tdEmpresa, tdCultura, tdEntrou, tdDuracao, tdTotal, tdAcao].forEach(function (x) {
       tr.appendChild(x);
     });
     return tr;
@@ -1484,6 +1758,7 @@ window.EXP_SHEETS_CONFIG = {
   var metaInfo = document.getElementById("metaInfo");
   var inputBusca = document.getElementById("inputBusca");
   var listaOperadores = document.getElementById("listaOperadores");
+  var vazioOperadores = document.getElementById("vazioOperadores");
   var formOperador = document.getElementById("formOperador");
   var inputOperador = document.getElementById("inputOperador");
   var inputPin = document.getElementById("inputPin");
@@ -1640,7 +1915,8 @@ window.EXP_SHEETS_CONFIG = {
     optVazia.value = "";
     optVazia.textContent = "Operador…";
     selOperadorAntecipado.appendChild(optVazia);
-    estado.operadores.forEach(function (o) {
+    // Só operador ativo pode receber carga nova.
+    estado.operadores.filter(E.operadorAtivo).forEach(function (o) {
       var opt = document.createElement("option");
       opt.value = o.nome;
       opt.textContent = o.nome;
@@ -1657,20 +1933,109 @@ window.EXP_SHEETS_CONFIG = {
     if (!nome || !/^\d{4}$/.test(pin)) return;
     var jaExiste = estado.operadores.some(function (o) { return o.nome.toLowerCase() === nome.toLowerCase(); });
     if (jaExiste) return;
-    persistirOperadores(estado.operadores.concat([{ nome: nome, pin: pin, turno: turno || null }]));
+    persistirOperadores(estado.operadores.concat([{ nome: nome, pin: pin, turno: turno || null, ativo: "1" }]));
   }
 
-  function removerOperador(nome) {
+  // Quantas cargas (atribuídas ou já separadas) apontam pra este operador.
+  function contarVinculos(nome) {
+    var total = 0, concluidas = 0;
+    Object.keys(estado.separacao).forEach(function (k) {
+      var s = estado.separacao[k];
+      if (!s || s.operador !== nome) return;
+      total++;
+      if (s.fimEm) concluidas++;
+    });
+    return { total: total, concluidas: concluidas, emAberto: total - concluidas };
+  }
+
+  // Inativar (em vez de excluir) preserva o histórico de desempenho.
+  function alternarAtivoOperador(nome) {
+    var op = estado.operadores.filter(function (o) { return o.nome === nome; })[0];
+    if (!op) return;
+    var vaiInativar = E.operadorAtivo(op);
+    if (vaiInativar) {
+      var v = contarVinculos(nome);
+      var aviso = "Inativar " + nome + "?\n\n" +
+        "Ele deixa de aparecer para receber cargas e não consegue mais entrar no app.\n" +
+        "O histórico de desempenho é mantido, e você pode reativar depois.";
+      if (v.emAberto > 0) {
+        aviso += "\n\nAtenção: há " + v.emAberto + " carga(s) em aberto com ele. " +
+          "Elas continuam atribuídas — desvincule antes se quiser passar para outro operador.";
+      }
+      if (!window.confirm(aviso)) return;
+    }
+    persistirOperadores(estado.operadores.map(function (o) {
+      if (o.nome !== nome) return o;
+      return Object.assign({}, o, { ativo: vaiInativar ? "0" : "1" });
+    }));
+  }
+
+  // Excluir de vez só para operador SEM nenhum vínculo — assim dá pra corrigir
+  // cadastro criado por engano sem arriscar apagar histórico de produtividade.
+  function excluirOperador(nome) {
+    var v = contarVinculos(nome);
+    if (v.total > 0) return;
+    if (!window.confirm("Excluir o cadastro de " + nome + "?\n\nEle não tem nenhuma carga vinculada, então nada de histórico se perde.")) return;
     persistirOperadores(estado.operadores.filter(function (o) { return o.nome !== nome; }));
   }
 
-  // Clicar no selo de turno alterna 1 -> 2 -> (sem turno) -> 1.
-  function alternarTurno(nome) {
+  // Renomear é delicado: o NOME é a identidade usada em separacao.operador, no
+  // histórico de desempenho e no login — então os registros de separação são
+  // migrados junto, senão o operador perde as cargas e o histórico dele.
+  function salvarOperador(nomeAntigo, nome, pin, turno) {
+    nome = (nome || "").trim();
+    pin = (pin || "").trim();
+    if (!nome || !/^\d{4}$/.test(pin)) return false;
+
+    var colide = estado.operadores.some(function (o) {
+      return o.nome !== nomeAntigo && o.nome.toLowerCase() === nome.toLowerCase();
+    });
+    if (colide) { window.alert("Já existe outro operador com o nome \"" + nome + "\"."); return false; }
+
+    var renomeou = nome !== nomeAntigo;
+    if (renomeou) {
+      var v = contarVinculos(nomeAntigo);
+      if (v.total > 0 && !window.confirm(
+        "Renomear \"" + nomeAntigo + "\" para \"" + nome + "\"?\n\n" +
+        v.total + " carga(s) vinculada(s) serão atualizadas para o nome novo, " +
+        "mantendo o histórico de desempenho dele."
+      )) return false;
+    }
+
     persistirOperadores(estado.operadores.map(function (o) {
-      if (o.nome !== nome) return o;
-      var proximo = o.turno === "1" || o.turno === 1 ? "2" : (o.turno === "2" || o.turno === 2 ? null : "1");
-      return Object.assign({}, o, { turno: proximo });
+      if (o.nome !== nomeAntigo) return o;
+      return Object.assign({}, o, { nome: nome, pin: pin, turno: turno || null });
     }));
+
+    if (renomeou) migrarNomeNasSeparacoes(nomeAntigo, nome);
+    return true;
+  }
+
+  function migrarNomeNasSeparacoes(nomeAntigo, nomeNovo) {
+    var chaves = Object.keys(estado.separacao).filter(function (k) {
+      var s = estado.separacao[k];
+      return s && s.operador === nomeAntigo;
+    });
+    if (!chaves.length) return;
+
+    var novo = Object.assign({}, estado.separacao);
+    chaves.forEach(function (k) {
+      novo[k] = Object.assign({}, novo[k], { operador: nomeNovo });
+    });
+    estado.separacao = novo;
+
+    if (usaFirestore()) {
+      chaves.forEach(function (k) {
+        E.Db.setDoc("separacao", E.Db.chaveParaDocId(k), dadosParaFirestore(k, novo[k]), { merge: true })
+          .catch(function (e) { console.warn("Falha ao migrar operador na separação:", e); });
+      });
+    } else {
+      try {
+        var demo = JSON.parse(localStorage.getItem("exp_demo") || "{}");
+        demo.separacao = novo;
+        localStorage.setItem("exp_demo", JSON.stringify(demo));
+      } catch (e) { /* ignore */ }
+    }
   }
 
   function rotuloTurno(turno) {
@@ -1679,30 +2044,137 @@ window.EXP_SHEETS_CONFIG = {
     return "sem turno";
   }
 
+  // Qual linha está em modo de edição (nome do operador), ou null.
+  var editando = null;
+
   function renderOperadores() {
     listaOperadores.innerHTML = "";
+    vazioOperadores.hidden = estado.operadores.length > 0;
     estado.operadores.forEach(function (o) {
-      var chip = document.createElement("span");
-      chip.className = "chip-operador";
-      var texto = document.createTextNode(o.nome);
-      chip.appendChild(texto);
-
-      var selo = document.createElement("button");
-      selo.type = "button";
-      selo.className = "selo-turno" + (o.turno ? " selo-turno--" + o.turno : "");
-      selo.textContent = rotuloTurno(o.turno);
-      selo.title = "Clique para trocar o turno";
-      selo.addEventListener("click", function () { alternarTurno(o.nome); });
-      chip.appendChild(selo);
-
-      var btn = document.createElement("button");
-      btn.type = "button";
-      btn.textContent = "×";
-      btn.title = "Remover operador";
-      btn.addEventListener("click", function () { removerOperador(o.nome); });
-      chip.appendChild(btn);
-      listaOperadores.appendChild(chip);
+      listaOperadores.appendChild(
+        editando === o.nome ? linhaOperadorEdicao(o) : linhaOperadorLeitura(o)
+      );
     });
+  }
+
+  function linhaOperadorLeitura(o) {
+    var ativo = E.operadorAtivo(o);
+    var tr = document.createElement("tr");
+    if (!ativo) tr.className = "operador-inativo";
+
+    var tdNome = document.createElement("td");
+    tdNome.textContent = o.nome;
+    if (!ativo) {
+      var selo = document.createElement("span");
+      selo.className = "selo-inativo";
+      selo.textContent = "inativo";
+      tdNome.appendChild(selo);
+    }
+    tr.appendChild(tdNome);
+
+    var tdPin = document.createElement("td");
+    tdPin.className = "pin-oculto";
+    tdPin.textContent = "••••";
+    tr.appendChild(tdPin);
+
+    var tdTurno = document.createElement("td");
+    var badge = document.createElement("span");
+    badge.className = "selo-turno" + (o.turno ? " selo-turno--" + o.turno : "");
+    badge.textContent = rotuloTurno(o.turno);
+    tdTurno.appendChild(badge);
+    tr.appendChild(tdTurno);
+
+    var tdAcoes = document.createElement("td");
+    tdAcoes.className = "acoes-operador";
+
+    tdAcoes.appendChild(botaoOp("Editar", "btn-editar", function () {
+      editando = o.nome;
+      renderOperadores();
+    }));
+
+    tdAcoes.appendChild(botaoOp(ativo ? "Inativar" : "Reativar", ativo ? "btn-remover" : "btn-editar", function () {
+      alternarAtivoOperador(o.nome);
+    }));
+
+    if (contarVinculos(o.nome).total === 0) {
+      tdAcoes.appendChild(botaoOp("Excluir", "btn-remover", function () {
+        excluirOperador(o.nome);
+      }));
+    }
+
+    tr.appendChild(tdAcoes);
+    return tr;
+  }
+
+  function linhaOperadorEdicao(o) {
+    var tr = document.createElement("tr");
+    tr.className = "operador-editando";
+
+    var tdNome = document.createElement("td");
+    var inNome = document.createElement("input");
+    inNome.type = "text";
+    inNome.maxLength = 40;
+    inNome.value = o.nome;
+    tdNome.appendChild(inNome);
+    tr.appendChild(tdNome);
+
+    var tdPin = document.createElement("td");
+    var inPin = document.createElement("input");
+    inPin.type = "text";
+    inPin.className = "input-pin";
+    inPin.inputMode = "numeric";
+    inPin.maxLength = 4;
+    inPin.value = o.pin || "";
+    tdPin.appendChild(inPin);
+    tr.appendChild(tdPin);
+
+    var tdTurno = document.createElement("td");
+    var selTurno = document.createElement("select");
+    selTurno.className = "input-turno";
+    [["", "Turno…"], ["1", "Turno 1 (07:30)"], ["2", "Turno 2 (19:30)"]].forEach(function (par) {
+      var opt = document.createElement("option");
+      opt.value = par[0];
+      opt.textContent = par[1];
+      selTurno.appendChild(opt);
+    });
+    selTurno.value = o.turno ? String(o.turno) : "";
+    tdTurno.appendChild(selTurno);
+    tr.appendChild(tdTurno);
+
+    var tdAcoes = document.createElement("td");
+    tdAcoes.className = "acoes-operador";
+
+    function salvar() {
+      if (!/^\d{4}$/.test((inPin.value || "").trim())) {
+        window.alert("O PIN precisa ter exatamente 4 dígitos.");
+        return;
+      }
+      if (salvarOperador(o.nome, inNome.value, inPin.value, selTurno.value)) {
+        editando = null;
+        render();
+      }
+    }
+
+    tdAcoes.appendChild(botaoOp("Salvar", "btn-salvar", salvar));
+    tdAcoes.appendChild(botaoOp("Cancelar", "btn-editar", function () {
+      editando = null;
+      renderOperadores();
+    }));
+
+    inNome.addEventListener("keydown", function (e) { if (e.key === "Enter") salvar(); });
+    inPin.addEventListener("keydown", function (e) { if (e.key === "Enter") salvar(); });
+
+    tr.appendChild(tdAcoes);
+    return tr;
+  }
+
+  function botaoOp(texto, cls, onClick) {
+    var b = document.createElement("button");
+    b.type = "button";
+    b.className = cls;
+    b.textContent = texto;
+    b.addEventListener("click", onClick);
+    return b;
   }
 
   // ---- Vínculo carga ↔ operador ----
@@ -1808,7 +2280,8 @@ window.EXP_SHEETS_CONFIG = {
     optVazia.value = "";
     optVazia.textContent = "Selecionar…";
     sel.appendChild(optVazia);
-    estado.operadores.forEach(function (o) {
+    // Só operador ativo pode receber carga nova.
+    estado.operadores.filter(E.operadorAtivo).forEach(function (o) {
       var opt = document.createElement("option");
       opt.value = o.nome;
       opt.textContent = o.nome;
@@ -1829,7 +2302,10 @@ window.EXP_SHEETS_CONFIG = {
       c._c = E.computar(c, agora);
       return c;
     }).filter(function (c) {
-      return c._c.status === E.STATUS.AGUARDANDO_SEPARACAO;
+      // Inclui a separação antecipada: é aqui que as cargas "PEND:" seguem
+      // acessíveis pra trocar operador ou usar Editar placa / Excluir.
+      return c._c.status === E.STATUS.AGUARDANDO_SEPARACAO ||
+        c._c.status === E.STATUS.SEPARACAO_ANTECIPADA;
     }).filter(function (c) {
       var termo = estado.busca.trim().toLowerCase();
       if (!termo) return true;
@@ -1866,7 +2342,11 @@ window.EXP_SHEETS_CONFIG = {
     atribuidas.forEach(function (c) { contagem[c.operador] = (contagem[c.operador] || 0) + 1; });
 
     var doTurno1 = [], doTurno2 = [], semTurno = [];
-    estado.operadores.forEach(function (o) {
+    // Inativo só aparece aqui se ainda tiver carga atribuída (aí precisa ficar
+    // visível pra ser resolvido); inativo sem carga sairia só poluindo.
+    estado.operadores.filter(function (o) {
+      return E.operadorAtivo(o) || (contagem[o.nome] || 0) > 0;
+    }).forEach(function (o) {
       var item = { nome: o.nome, total: contagem[o.nome] || 0 };
       if (o.turno === "1" || o.turno === 1) doTurno1.push(item);
       else if (o.turno === "2" || o.turno === 2) doTurno2.push(item);
@@ -1915,7 +2395,8 @@ window.EXP_SHEETS_CONFIG = {
     tr.appendChild(td(esc(c._flags.ordemMontadaTs ? fmtDataHora(c._flags.ordemMontadaTs) : "—")));
 
     var tdAcao = document.createElement("td");
-    if (estado.operadores.length === 0) {
+    // Conta só os ativos: se todos estiverem inativados, o seletor viria vazio.
+    if (estado.operadores.filter(E.operadorAtivo).length === 0) {
       tdAcao.innerHTML = '<span class="aviso-inline">cadastre um operador acima</span>';
     } else {
       tdAcao.appendChild(selecionarOperador(c.chave, function (nome) { atribuir(c.chave, nome); }));
@@ -2016,13 +2497,19 @@ window.EXP_SHEETS_CONFIG = {
         var rows = (r[0] && r[0].rows) || [];
         var mapa = {};
         (r[1] || []).forEach(function (doc) { if (doc.chaveOriginal) mapa[doc.chaveOriginal] = doc; });
+        jaCarregouOk = true;
         render(rows, mapa, (r[0] && r[0].capturedAt) || null);
         if (E.AdminShell) E.AdminShell.atualizarBadgeComDados(rows, mapa);
-      }).catch(carregarDemo);
+      }).catch(function () {
+        // Mantém o último dado bom na tela em vez de zerar (ver painel).
+        if (!jaCarregouOk) carregarDemo();
+      });
     } else {
       carregarDemo();
     }
   }
+
+  var jaCarregouOk = false;
 
   function carregarDemo() {
     var demo = {};
@@ -2053,20 +2540,36 @@ window.EXP_SHEETS_CONFIG = {
       return E.mesmoDia(c._c.desde, hoje);
     });
     var contagem = {};
-    E.STATUS_META.forEach(function (m) { contagem[m.key] = 0; });
-    visiveis.forEach(function (c) { contagem[c._c.status] = (contagem[c._c.status] || 0) + 1; });
+    // "c/ pendência" é um SUBCONJUNTO de contagem. Cada carga tem exatamente
+    // um status, então a coluna Quantidade continua somando o Total exato — a
+    // de pendência nunca deve ser somada a ela, só lida como "destas, quantas
+    // estão irregulares".
+    var pendentes = {};
+    E.STATUS_META.forEach(function (m) { contagem[m.key] = 0; pendentes[m.key] = 0; });
+    visiveis.forEach(function (c) {
+      contagem[c._c.status] = (contagem[c._c.status] || 0) + 1;
+      if (c._flags && c._flags.temPendencia) {
+        pendentes[c._c.status] = (pendentes[c._c.status] || 0) + 1;
+      }
+    });
+    var totalPendentes = visiveis.filter(function (c) {
+      return c._flags && c._flags.temPendencia;
+    }).length;
 
     corpoStatus.innerHTML = "";
     E.STATUS_META.forEach(function (m) {
       var tr = document.createElement("tr");
+      var p = pendentes[m.key] || 0;
       tr.innerHTML =
         "<td><span class=\"status-dot\" style=\"background:" + m.color + "\"></span>" + esc(m.key) + "</td>" +
-        "<td class=\"num\">" + fmtNum(contagem[m.key] || 0) + "</td>";
+        "<td class=\"num\">" + fmtNum(contagem[m.key] || 0) + "</td>" +
+        "<td class=\"num" + (p > 0 ? " nivel-amarelo" : "") + "\">" + (p > 0 ? fmtNum(p) : "—") + "</td>";
       corpoStatus.appendChild(tr);
     });
     var trTotal = document.createElement("tr");
     trTotal.className = "total-row";
-    trTotal.innerHTML = "<td>Total</td><td class=\"num\">" + fmtNum(visiveis.length) + "</td>";
+    trTotal.innerHTML = "<td>Total</td><td class=\"num\">" + fmtNum(visiveis.length) + "</td>" +
+      "<td class=\"num\">" + (totalPendentes > 0 ? fmtNum(totalPendentes) : "—") + "</td>";
     corpoStatus.appendChild(trTotal);
   }
 
@@ -2152,6 +2655,7 @@ window.EXP_SHEETS_CONFIG = {
 
   var estadoTurno = "todos";
   var ultimoD = null;
+  var jaCarregouOk = false;
 
   function usaFirestore() {
     return !!(E.Db && E.Db.temConfig());
@@ -2164,9 +2668,13 @@ window.EXP_SHEETS_CONFIG = {
         var rows = (r[0] && r[0].rows) || [];
         var mapa = {};
         (r[2] || []).forEach(function (doc) { if (doc.chaveOriginal) mapa[doc.chaveOriginal] = doc; });
+        jaCarregouOk = true;
         render(rows, mapa, (r[1] && r[1].lista) || [], (r[0] && r[0].capturedAt) || null);
         if (E.AdminShell) E.AdminShell.atualizarBadgeComDados(rows, mapa);
-      }).catch(carregarDemo);
+      }).catch(function () {
+        // Mantém o último dado bom na tela em vez de zerar (ver painel).
+        if (!jaCarregouOk) carregarDemo();
+      });
     } else {
       carregarDemo();
     }
@@ -2637,6 +3145,17 @@ window.EXP_SHEETS_CONFIG = {
     }
   }
 
+  // Nunca deixa vazar o "chaveOriginal" antigo nem o "_id" (metadado do
+  // listCollection): define chaveOriginal por ÚLTIMO, senão o valor que vem
+  // dentro de "dados" (órfão reconciliado) sobrescreve o correto.
+  function dadosParaFirestore(chave, dados) {
+    var limpo = Object.assign({}, dados);
+    delete limpo._id;
+    delete limpo.chaveOriginal;
+    limpo.chaveOriginal = chave;
+    return limpo;
+  }
+
   function persistirSeparacao(chave, patch) {
     var atual = estado.separacao[chave] || {};
 
@@ -2661,7 +3180,13 @@ window.EXP_SHEETS_CONFIG = {
 
     if (usaFirestore()) {
       var docId = E.Db.chaveParaDocId(chave);
-      E.Db.setDoc("separacao", docId, Object.assign({ chaveOriginal: chave }, novo), { merge: true })
+      // dadosParaFirestore (e não Object.assign({chaveOriginal: chave}, novo)):
+      // quando "novo" vem do órfão reconciliado ele já carrega o
+      // "chaveOriginal" ANTIGO ("PEND:placa"), e no Object.assign o último
+      // argumento vence — o valor velho sobrescrevia o certo e o documento
+      // ficava gravado sob a chave real mas rotulado com a chave PEND. Como os
+      // leitores indexam por chaveOriginal, a carga era lida sob a chave errada.
+      E.Db.setDoc("separacao", docId, dadosParaFirestore(chave, novo), { merge: true })
         .catch(function () { mostrarBanner("Não deu pra salvar agora — tente de novo.", true); });
       if (chaveOrfa) {
         E.Db.deleteDoc("separacao", E.Db.chaveParaDocId(chaveOrfa)).catch(function () { /* ignore */ });
@@ -2696,6 +3221,13 @@ window.EXP_SHEETS_CONFIG = {
 
     var op = estado.operadores.filter(function (o) { return o.nome.toLowerCase() === usuario.toLowerCase(); })[0];
     if (op && op.pin === senha) {
+      // Credenciais certas, mas o cadastro foi inativado: avisa o motivo em vez
+      // de dizer "senha incorreta", que mandaria a pessoa tentar de novo à toa.
+      if (!E.operadorAtivo(op)) {
+        erroLogin.textContent = "Seu acesso está inativo. Procure a Distribuição.";
+        erroLogin.hidden = false;
+        return;
+      }
       erroLogin.hidden = true;
       localStorage.setItem(SESSAO_KEY, JSON.stringify({ tipo: "operador", nome: op.nome }));
       entrarComoOperador(op.nome);
@@ -2751,7 +3283,9 @@ window.EXP_SHEETS_CONFIG = {
       return c;
     }).filter(function (c) {
       return c.operador === nome &&
-        (c._c.status === E.STATUS.AGUARDANDO_SEPARACAO || c._c.status === E.STATUS.EM_SEPARACAO);
+        (c._c.status === E.STATUS.AGUARDANDO_SEPARACAO ||
+         c._c.status === E.STATUS.SEPARACAO_ANTECIPADA ||
+         c._c.status === E.STATUS.EM_SEPARACAO);
     }).sort(function (a, b) {
       var ta = a._flags.ordemMontadaTs ? a._flags.ordemMontadaTs.getTime() : 0;
       var tb = b._flags.ordemMontadaTs ? b._flags.ordemMontadaTs.getTime() : 0;
@@ -2802,7 +3336,11 @@ window.EXP_SHEETS_CONFIG = {
     var div = document.createElement("div");
     div.className = "card-carga";
 
-    var emSeparacao = c._c.status === E.STATUS.EM_SEPARACAO;
+    // Se já começou é pelo timestamp, não pelo status: uma separação
+    // antecipada em andamento fica em "Separação antecipada", não em "Em
+    // separação" — usar o status aqui faria o botão voltar pra "Iniciar".
+    var emSeparacao = !!c._flags.sepInicioTs;
+    var pend = E.pendenciasTexto(c);
 
     div.innerHTML =
       '<div class="card-topo">' +
@@ -2812,6 +3350,7 @@ window.EXP_SHEETS_CONFIG = {
       linhaInfo("Placa", c.placa) +
       linhaInfo("Empresa", c.empresa) +
       linhaInfo("Cliente", c.cliente) +
+      (pend !== "—" ? '<div class="card-pendencia">' + esc(pend) + "</div>" : "") +
       (emSeparacao ? '<div class="card-desde">Iniciada há ' + E.fmtDur(c._c.duracaoStatusMs) + "</div>" : "");
 
     var btn = document.createElement("button");
@@ -2858,7 +3397,10 @@ window.EXP_SHEETS_CONFIG = {
     var sessao = sessaoAtual();
     if (sessao && sessao.tipo === "admin") {
       entrarComoAdmin();
-    } else if (sessao && sessao.tipo === "operador" && estado.operadores.some(function (o) { return o.nome === sessao.nome; })) {
+    } else if (sessao && sessao.tipo === "operador" && estado.operadores.some(function (o) {
+      // Inativado enquanto estava logado: a sessão cai no próximo carregamento.
+      return o.nome === sessao.nome && E.operadorAtivo(o);
+    })) {
       entrarComoOperador(sessao.nome);
     } else {
       if (sessao) localStorage.removeItem(SESSAO_KEY);
