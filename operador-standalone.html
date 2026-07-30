@@ -1204,7 +1204,12 @@ window.EXP_SHEETS_CONFIG = {
   // isso, a tela de login fica travada pra sempre esperando uma resposta que
   // nunca chega. Com o timeout, o .catch() de cada chamada dispara
   // normalmente e a tela cai pro modo local/offline.
-  var FETCH_TIMEOUT_MS = 10000;
+  // 30s (e não 10s como na versão Firestore): o Apps Script é bem mais lento
+  // que o Firestore — uma leitura normal leva 1,5-3s, e sob concorrência pode
+  // passar de 10s. Com 10s, parte das leituras era abortada por engano e a
+  // tela ficava zerada. O timeout continua existindo pra não travar pra
+  // sempre (é o que corrigiu o congelamento no iPhone), só com folga real.
+  var FETCH_TIMEOUT_MS = 30000;
   function fetchComTimeout(url, opts) {
     return new Promise(function (resolve, reject) {
       var atendido = false;
@@ -1245,6 +1250,18 @@ window.EXP_SHEETS_CONFIG = {
     });
   }
 
+  // Traz hisowerRows + operadores + separacao numa requisição só — cada tela
+  // fazia 3 chamadas em paralelo, e com várias telas/aparelhos atualizando ao
+  // mesmo tempo o Apps Script enfileirava o excesso e parte das leituras
+  // estourava o tempo, deixando tudo zerado.
+  function getTudo() {
+    if (!temConfig()) return Promise.reject(new Error("Web App não configurado."));
+    return fetchComTimeout(CONFIG.webAppUrl + "?action=getTudo").then(function (res) {
+      if (!res.ok) throw new Error("Planilha getTudo HTTP " + res.status);
+      return res.json();
+    });
+  }
+
   // IMPORTANTE (CORS): manda o POST com Content-Type text/plain — se fosse
   // application/json o navegador dispararia um preflight OPTIONS, que o Apps
   // Script Web App não responde corretamente, e a chamada falharia por CORS.
@@ -1277,6 +1294,7 @@ window.EXP_SHEETS_CONFIG = {
   window.Exp.Db = {
     temConfig: temConfig,
     getDoc: getDoc,
+    getTudo: getTudo,
     setDoc: setDoc,
     deleteDoc: deleteDoc,
     listCollection: listCollection,
@@ -1322,10 +1340,8 @@ window.EXP_SHEETS_CONFIG = {
 
   function carregar() {
     if (usaFirestore()) {
-      Promise.all([
-        E.Db.getDoc("estado", "hisowerRows"),
-        E.Db.listCollection("separacao")
-      ]).then(function (r) {
+      E.Db.getTudo().then(function (t) {
+        var r = [t.hisowerRows, t.separacao];
         estado.rows = (r[0] && r[0].rows) || [];
         estado.capturedAt = (r[0] && r[0].capturedAt) || null;
         var mapa = {};
@@ -1495,11 +1511,8 @@ window.EXP_SHEETS_CONFIG = {
 
   function carregar() {
     if (usaFirestore()) {
-      Promise.all([
-        E.Db.getDoc("estado", "hisowerRows"),
-        E.Db.getDoc("estado", "operadores"),
-        E.Db.listCollection("separacao")
-      ]).then(function (r) {
+      E.Db.getTudo().then(function (t) {
+        var r = [t.hisowerRows, t.operadores, t.separacao];
         estado.rows = (r[0] && r[0].rows) || [];
         estado.capturedAt = (r[0] && r[0].capturedAt) || null;
         estado.operadores = (r[1] && r[1].lista) || [];
@@ -1998,10 +2011,8 @@ window.EXP_SHEETS_CONFIG = {
 
   function carregar() {
     if (usaFirestore()) {
-      Promise.all([
-        E.Db.getDoc("estado", "hisowerRows"),
-        E.Db.listCollection("separacao")
-      ]).then(function (r) {
+      E.Db.getTudo().then(function (t) {
+        var r = [t.hisowerRows, t.separacao];
         var rows = (r[0] && r[0].rows) || [];
         var mapa = {};
         (r[1] || []).forEach(function (doc) { if (doc.chaveOriginal) mapa[doc.chaveOriginal] = doc; });
@@ -2148,11 +2159,8 @@ window.EXP_SHEETS_CONFIG = {
 
   function carregar() {
     if (usaFirestore()) {
-      Promise.all([
-        E.Db.getDoc("estado", "hisowerRows"),
-        E.Db.getDoc("estado", "operadores"),
-        E.Db.listCollection("separacao")
-      ]).then(function (r) {
+      E.Db.getTudo().then(function (t) {
+        var r = [t.hisowerRows, t.operadores, t.separacao];
         var rows = (r[0] && r[0].rows) || [];
         var mapa = {};
         (r[2] || []).forEach(function (doc) { if (doc.chaveOriginal) mapa[doc.chaveOriginal] = doc; });
@@ -2602,11 +2610,8 @@ window.EXP_SHEETS_CONFIG = {
 
   function carregar(cb) {
     if (usaFirestore()) {
-      Promise.all([
-        E.Db.getDoc("estado", "hisowerRows"),
-        E.Db.getDoc("estado", "operadores"),
-        E.Db.listCollection("separacao")
-      ]).then(function (r) {
+      E.Db.getTudo().then(function (t) {
+        var r = [t.hisowerRows, t.operadores, t.separacao];
         estado.rows = (r[0] && r[0].rows) || [];
         estado.operadores = (r[1] && r[1].lista) || [];
         var mapa = {};
