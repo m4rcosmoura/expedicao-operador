@@ -593,7 +593,6 @@ tbody tr.linha-pendencia td:first-child { box-shadow: inset 3px 0 0 #b26a00; }
               <th>Carga Web</th>
               <th>Placa</th>
               <th>Empresa</th>
-              <th>Cliente</th>
               <th>Ordem montada em</th>
               <th>Operador</th>
             </tr>
@@ -613,7 +612,6 @@ tbody tr.linha-pendencia td:first-child { box-shadow: inset 3px 0 0 #b26a00; }
               <th>Carga Web</th>
               <th>Placa</th>
               <th>Empresa</th>
-              <th>Cliente</th>
               <th>Operador</th>
               <th></th>
             </tr>
@@ -2386,7 +2384,6 @@ window.EXP_SHEETS_CONFIG = {
     var empClass = "empresa-tag" +
       (c.empresa === "Basf" ? " empresa-basf" : c.empresa === "Multiplicação" ? " empresa-multiplicacao" : "");
     tr.appendChild(td('<span class="' + empClass + '">' + esc(c.empresa) + "</span>"));
-    tr.appendChild(td(esc(c.cliente)));
     return tr;
   }
 
