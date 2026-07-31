@@ -218,6 +218,21 @@ tbody tr:nth-child(even) { background: var(--stripe); }
 .btn-atualizar:hover { filter: brightness(1.15); }
 .btn-atualizar[disabled] { opacity: .45; cursor: default; }
 
+/* Modo captura (#resumo,captura): deixa na tela só o conteúdo, sem topo nem
+   navegação, pra a automação do print no WhatsApp gerar uma imagem limpa —
+   e pra o recorte não depender de adivinhar onde a interface termina. */
+body.modo-captura #topoLogado,
+body.modo-captura #faixaCarregando,
+body.modo-captura #adminTabs,
+body.modo-captura #statusBanner { display: none !important; }
+body.modo-captura .resumo-main { padding: 10px 14px; gap: 14px; }
+body.modo-captura .admin-view { padding-bottom: 0; }
+/* A tabela de carregamentos diários tem 11 colunas de data e não cabe na
+   largura de tela disponível; sem isso ela saía cortada na imagem. Reduzir um
+   pouco aqui garante que ela entre inteira em qualquer monitor, sem depender
+   do tamanho da janela. */
+body.modo-captura { zoom: 0.85; }
+
 .form-operador { display: flex; gap: 8px; flex-wrap: wrap; }
 .form-operador input, .form-operador select {
   flex: 1; min-width: 200px; font-size: var(--fs-body); padding: 8px 12px;
@@ -662,7 +677,7 @@ tbody tr.linha-pendencia td:first-child { box-shadow: inset 3px 0 0 #b26a00; }
     <h2>Cargas por status</h2>
     <div class="tabela-wrap">
       <table>
-        <thead><tr><th>Status</th><th class="num">Quantidade</th><th></th></tr></thead>
+        <thead id="rsmTheadStatus"></thead>
         <tbody id="rsmCorpoStatus"></tbody>
       </table>
     </div>
@@ -2376,20 +2391,23 @@ window.EXP_SHEETS_CONFIG = {
     renderOpcoesAntecipado();
 
     var agora = Date.now();
-    var cargas = E.agregar(estado.rows, estado.separacao).map(function (c) {
+    var todas = E.agregar(estado.rows, estado.separacao).map(function (c) {
       c._c = E.computar(c, agora);
       return c;
-    }).filter(function (c) {
-      // Inclui a separação antecipada: é aqui que as cargas "PEND:" seguem
-      // acessíveis pra trocar operador ou usar Editar placa / Excluir.
-      return c._c.status === E.STATUS.AGUARDANDO_SEPARACAO ||
-        c._c.status === E.STATUS.SEPARACAO_ANTECIPADA;
-    }).filter(function (c) {
+    });
+    function bateBusca(c) {
       var termo = estado.busca.trim().toLowerCase();
       if (!termo) return true;
       var alvo = [c.progWeb, c.placa, c.empresa, c.cliente].join(" ").toLowerCase();
       return alvo.indexOf(termo) !== -1;
-    }).sort(function (a, b) {
+    }
+
+    var cargas = todas.filter(function (c) {
+      // Inclui a separação antecipada: é aqui que as cargas "PEND:" seguem
+      // acessíveis pra trocar operador ou usar Editar placa / Excluir.
+      return c._c.status === E.STATUS.AGUARDANDO_SEPARACAO ||
+        c._c.status === E.STATUS.SEPARACAO_ANTECIPADA;
+    }).filter(bateBusca).sort(function (a, b) {
       var ta = a._flags.ordemMontadaTs ? a._flags.ordemMontadaTs.getTime() : 0;
       var tb = b._flags.ordemMontadaTs ? b._flags.ordemMontadaTs.getTime() : 0;
       return ta - tb;
@@ -2398,7 +2416,14 @@ window.EXP_SHEETS_CONFIG = {
     var pendentes = cargas.filter(function (c) { return !c.operador; });
     var atribuidas = cargas.filter(function (c) { return !!c.operador; });
 
-    renderResumoOperador(atribuidas);
+    // Resumo por turno conta também as cargas já "Em separação": o operador
+    // já está trabalhando nelas, então ainda contam como carga atribuída a
+    // ele — sem isso, o total do turno caía assim que ele clicava em Iniciar.
+    var emSeparacao = todas.filter(function (c) {
+      return c._c.status === E.STATUS.EM_SEPARACAO && !!c.operador;
+    }).filter(bateBusca);
+
+    renderResumoOperador(atribuidas.concat(emSeparacao));
 
     tituloPendentes.textContent = "Aguardando atribuição (" + pendentes.length + ")";
     tituloAtribuidas.textContent = "Já atribuídas (" + atribuidas.length + ")";
@@ -2558,6 +2583,7 @@ window.EXP_SHEETS_CONFIG = {
   window.Exp.AdminViews = window.Exp.AdminViews || {};
   var DIAS_PARA_TRAS = 10;
 
+  var theadStatus = document.getElementById("rsmTheadStatus");
   var corpoStatus = document.getElementById("rsmCorpoStatus");
   var theadDiaria = document.getElementById("rsmTheadDiaria");
   var corpoDiaria = document.getElementById("rsmCorpoDiaria");
@@ -2619,28 +2645,54 @@ window.EXP_SHEETS_CONFIG = {
     // dentro de "Em separação" (é separação, só adiantada) e o que a distingue
     // vira uma observação abaixo da tabela. A aba "Separação antecipada" do
     // Painel continua existindo pra quem precisa ver quais são.
+    // Uma coluna por empresa (mesma divisão da tabela de carregamentos
+    // diários), mais a coluna Total. As colunas saem de E.EMPRESAS pra não
+    // repetir a lista aqui.
     var contagem = {};
-    E.STATUS_META.forEach(function (m) { contagem[m.key] = 0; });
+    E.STATUS_META.forEach(function (m) {
+      contagem[m.key] = {};
+      E.EMPRESAS.forEach(function (emp) { contagem[m.key][emp] = 0; });
+    });
     visiveis.forEach(function (c) {
       var chave = c._c.status === E.STATUS.SEPARACAO_ANTECIPADA
         ? E.STATUS.EM_SEPARACAO
         : c._c.status;
-      contagem[chave] = (contagem[chave] || 0) + 1;
+      if (contagem[chave] && contagem[chave][c.empresa] !== undefined) {
+        contagem[chave][c.empresa] += 1;
+      }
     });
+
+    theadStatus.innerHTML = "<tr><th>Status</th>" +
+      E.EMPRESAS.map(function (emp) { return '<th class="num">' + esc(emp) + "</th>"; }).join("") +
+      '<th class="num">Total</th><th></th></tr>';
 
     corpoStatus.innerHTML = "";
     E.STATUS_META.forEach(function (m) {
       if (m.key === E.STATUS.SEPARACAO_ANTECIPADA) return; // somada em "Em separação"
+      var porEmpresa = contagem[m.key];
+      var totalLinha = E.EMPRESAS.reduce(function (acc, emp) { return acc + porEmpresa[emp]; }, 0);
       var tr = document.createElement("tr");
       tr.innerHTML =
         "<td><span class=\"status-dot\" style=\"background:" + m.color + "\"></span>" + esc(m.key) + "</td>" +
-        "<td class=\"num\">" + fmtNum(contagem[m.key] || 0) + "</td>" +
+        E.EMPRESAS.map(function (emp) {
+          return '<td class="num">' + (porEmpresa[emp] ? fmtNum(porEmpresa[emp]) : "") + "</td>";
+        }).join("") +
+        '<td class="num">' + (totalLinha ? fmtNum(totalLinha) : "") + "</td>" +
         "<td class=\"obs-celula\">" + obsDoStatus(visiveis, m.key) + "</td>";
       corpoStatus.appendChild(tr);
     });
+
     var trTotal = document.createElement("tr");
     trTotal.className = "total-row";
-    trTotal.innerHTML = "<td>Total</td><td class=\"num\">" + fmtNum(visiveis.length) + "</td><td></td>";
+    trTotal.innerHTML = "<td>Total</td>" +
+      E.EMPRESAS.map(function (emp) {
+        var t = E.STATUS_META.reduce(function (acc, m) {
+          if (m.key === E.STATUS.SEPARACAO_ANTECIPADA) return acc;
+          return acc + contagem[m.key][emp];
+        }, 0);
+        return '<td class="num">' + (t ? fmtNum(t) : "") + "</td>";
+      }).join("") +
+      '<td class="num">' + fmtNum(visiveis.length) + "</td><td></td>";
     corpoStatus.appendChild(trTotal);
   }
 
@@ -3369,13 +3421,37 @@ window.EXP_SHEETS_CONFIG = {
 
   // Só o administrador vê o app inteiro (Painel/Distribuição/Resumo/
   // Desempenho) — o operador só vê as próprias cargas.
+  // Aba inicial do admin. Aceita ser escolhida pela URL (#resumo, #painel,
+  // #distribuicao, #desempenho): é assim que a automação de captura abre
+  // direto no Resumo, sem precisar simular clique. Sem hash válido, Painel.
+  function partesDoHash() {
+    return String(window.location.hash || "").replace("#", "").toLowerCase().split(",");
+  }
+
+  function abaInicial() {
+    var validas = ["painel", "distribuicao", "resumo", "desempenho"];
+    var achada = partesDoHash().filter(function (p) { return validas.indexOf(p) !== -1; })[0];
+    return achada || "painel";
+  }
+
+  // "#resumo,captura" — modo usado pela automação do print: esconde topo,
+  // navegação e faixa, deixando na tela só as tabelas. Assim o recorte da
+  // imagem não precisa adivinhar onde o conteúdo começa e termina, e nada de
+  // interface entra no que vai pro WhatsApp.
+  function aplicarModoCaptura() {
+    if (partesDoHash().indexOf("captura") !== -1) {
+      document.body.classList.add("modo-captura");
+    }
+  }
+
   function entrarComoAdmin() {
     telaLogin.hidden = true;
     telaOperador.hidden = true;
     viewAdmin.hidden = false;
     topoLogado.hidden = false;
     sessaoLabel.textContent = "Administrador";
-    if (window.Exp && Exp.AdminShell) Exp.AdminShell.ativarAba("painel");
+    aplicarModoCaptura();
+    if (window.Exp && Exp.AdminShell) Exp.AdminShell.ativarAba(abaInicial());
   }
 
   function entrarComoOperador(nome) {
