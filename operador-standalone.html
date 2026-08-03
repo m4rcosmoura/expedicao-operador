@@ -379,6 +379,12 @@ body.modo-captura { zoom: 0.85; }
   font-size: var(--fs-body);
 }
 .filtros { display: flex; flex-wrap: wrap; gap: 8px; margin: 0 0 14px; }
+/* Filtro por empresa: dentro de um cartão, pra se diferenciar visualmente do
+   filtro de status/turno logo abaixo. */
+.filtros--empresa {
+  padding: 10px 12px; background: var(--surface); border-radius: 12px;
+  box-shadow: 0 1px 3px rgba(20, 41, 77, .1), 0 1px 2px rgba(20, 41, 77, .06);
+}
 .tab-pill {
   position: relative; cursor: pointer; user-select: none; white-space: nowrap;
   font-size: var(--fs-small); font-weight: 700; color: var(--txt-dim);
@@ -527,6 +533,7 @@ tbody tr.linha-pendencia td:first-child { box-shadow: inset 3px 0 0 #b26a00; }
 <section id="viewPainel" class="admin-view ativo" data-view="painel">
   <div id="pnlMetaInfo" class="meta-info"></div>
   <div id="pnlAlerta" class="alerta" hidden></div>
+  <nav class="filtros filtros--empresa" id="pnlFiltrosEmpresa"></nav>
   <nav class="filtros" id="pnlFiltros"></nav>
   <div class="tabela-wrap">
     <table>
@@ -552,6 +559,7 @@ tbody tr.linha-pendencia td:first-child { box-shadow: inset 3px 0 0 #b26a00; }
 </section>
 
 <section id="viewDistribuicao" class="admin-view" data-view="distribuicao">
+  <nav class="filtros filtros--empresa" id="filtrosEmpresa"></nav>
   <main class="resumo-main">
     <div id="metaInfo" class="meta-info"></div>
 
@@ -671,6 +679,7 @@ tbody tr.linha-pendencia td:first-child { box-shadow: inset 3px 0 0 #b26a00; }
 </section>
 
 <section id="viewResumo" class="admin-view" data-view="resumo">
+  <nav class="filtros filtros--empresa" id="rsmFiltrosEmpresa"></nav>
   <div id="rsmCaptura" class="meta-info"></div>
 
   <section class="bloco">
@@ -695,6 +704,7 @@ tbody tr.linha-pendencia td:first-child { box-shadow: inset 3px 0 0 #b26a00; }
 </section>
 
 <section id="viewDesempenho" class="admin-view" data-view="desempenho">
+  <nav class="filtros filtros--empresa" id="dspFiltrosEmpresa"></nav>
   <div id="dspCaptura" class="meta-info"></div>
 
   <section class="kpi-row">
@@ -1532,12 +1542,13 @@ window.EXP_SHEETS_CONFIG = {
 
   var E = window.Exp;
   window.Exp.AdminViews = window.Exp.AdminViews || {};
-  var estado = { rows: [], separacao: {}, operadores: [], capturedAt: null, filtro: null };
+  var estado = { rows: [], separacao: {}, operadores: [], capturedAt: null, filtro: null, filtroEmpresa: null };
 
   var corpo = document.getElementById("pnlCorpo");
   var vazio = document.getElementById("pnlVazio");
   var metaInfo = document.getElementById("pnlMetaInfo");
   var filtros = document.getElementById("pnlFiltros");
+  var filtrosEmpresa = document.getElementById("pnlFiltrosEmpresa");
   var alerta = document.getElementById("pnlAlerta");
   var thOperador = document.getElementById("pnlThOperador");
   var thPendencia = document.getElementById("pnlThPendencia");
@@ -1703,13 +1714,18 @@ window.EXP_SHEETS_CONFIG = {
       return E.mesmoDia(c._c.desde, hoje);
     });
 
+    var cargasDaEmpresa = cargas.filter(function (c) {
+      return !estado.filtroEmpresa || c.empresa === estado.filtroEmpresa;
+    });
     var contagem = {};
     E.STATUS_META.forEach(function (m) { contagem[m.key] = 0; });
-    cargas.forEach(function (c) { contagem[c._c.status] = (contagem[c._c.status] || 0) + 1; });
-    renderFiltros(contagem, cargas.length);
+    cargasDaEmpresa.forEach(function (c) { contagem[c._c.status] = (contagem[c._c.status] || 0) + 1; });
+    renderFiltros(contagem, cargasDaEmpresa.length);
+    renderFiltrosEmpresa();
 
     var lista = cargas.filter(function (c) {
-      return !estado.filtro || c._c.status === estado.filtro;
+      return (!estado.filtro || c._c.status === estado.filtro) &&
+        (!estado.filtroEmpresa || c.empresa === estado.filtroEmpresa);
     });
     lista.sort(function (a, b) {
       var d = E.ordemStatus(a._c.status) - E.ordemStatus(b._c.status);
@@ -1738,30 +1754,46 @@ window.EXP_SHEETS_CONFIG = {
     corpo.innerHTML = "";
     lista.forEach(function (c) { corpo.appendChild(linha(c, mostraOperador, mostraPendencia, mostraAcao)); });
 
-    vazio.hidden = cargas.length > 0;
-    metaInfo.textContent = cargas.length + " cargas" +
+    vazio.hidden = cargasDaEmpresa.length > 0;
+    metaInfo.textContent = cargasDaEmpresa.length + " cargas" +
       (estado.capturedAt ? " · atualizado " + new Date(estado.capturedAt).toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" }) : "");
+  }
+
+  function pill(ativo, label, count, onClick) {
+    var el = document.createElement("div");
+    el.className = "tab-pill" + (ativo ? " ativo" : "");
+    el.innerHTML = esc(label) +
+      (count > 0 ? '<span class="badge-count">' + count + "</span>" : "");
+    el.addEventListener("click", onClick);
+    return el;
   }
 
   function renderFiltros(contagem, total) {
     filtros.innerHTML = "";
-    filtros.appendChild(stat(null, "Todas", total));
+    filtros.appendChild(pill(!estado.filtro, "Todas", total, function () {
+      estado.filtro = null;
+      render();
+    }));
     E.STATUS_META.forEach(function (m) {
-      filtros.appendChild(stat(m.key, m.key, contagem[m.key] || 0));
+      filtros.appendChild(pill(estado.filtro === m.key, m.key, contagem[m.key] || 0, function () {
+        estado.filtro = estado.filtro === m.key ? null : m.key;
+        render();
+      }));
     });
   }
 
-  function stat(key, label, count) {
-    var el = document.createElement("div");
-    var ativo = estado.filtro === key;
-    el.className = "tab-pill" + (ativo ? " ativo" : "");
-    el.innerHTML = esc(label) +
-      (count > 0 ? '<span class="badge-count">' + count + "</span>" : "");
-    el.addEventListener("click", function () {
-      estado.filtro = estado.filtro === key ? null : key;
+  function renderFiltrosEmpresa() {
+    filtrosEmpresa.innerHTML = "";
+    filtrosEmpresa.appendChild(pill(!estado.filtroEmpresa, "Todas", 0, function () {
+      estado.filtroEmpresa = null;
       render();
+    }));
+    E.EMPRESAS.forEach(function (emp) {
+      filtrosEmpresa.appendChild(pill(estado.filtroEmpresa === emp, emp, 0, function () {
+        estado.filtroEmpresa = estado.filtroEmpresa === emp ? null : emp;
+        render();
+      }));
     });
-    return el;
   }
 
   function linha(c, mostraOperador, mostraPendencia, mostraAcao) {
@@ -1843,9 +1875,10 @@ window.EXP_SHEETS_CONFIG = {
   "use strict";
 
   var E = window.Exp;
-  var estado = { rows: [], separacao: {}, operadores: [], capturedAt: null, busca: "" };
+  var estado = { rows: [], separacao: {}, operadores: [], capturedAt: null, busca: "", filtroEmpresa: null };
 
   var metaInfo = document.getElementById("metaInfo");
+  var filtrosEmpresa = document.getElementById("filtrosEmpresa");
   var inputBusca = document.getElementById("inputBusca");
   var listaOperadores = document.getElementById("listaOperadores");
   var vazioOperadores = document.getElementById("vazioOperadores");
@@ -2401,13 +2434,20 @@ window.EXP_SHEETS_CONFIG = {
       var alvo = [c.progWeb, c.placa, c.empresa, c.cliente].join(" ").toLowerCase();
       return alvo.indexOf(termo) !== -1;
     }
+    function bateEmpresa(c) {
+      return !estado.filtroEmpresa || c.empresa === estado.filtroEmpresa;
+    }
 
-    var cargas = todas.filter(function (c) {
+    var candidatos = todas.filter(function (c) {
       // Inclui a separação antecipada: é aqui que as cargas "PEND:" seguem
       // acessíveis pra trocar operador ou usar Editar placa / Excluir.
       return c._c.status === E.STATUS.AGUARDANDO_SEPARACAO ||
         c._c.status === E.STATUS.SEPARACAO_ANTECIPADA;
-    }).filter(bateBusca).sort(function (a, b) {
+    }).filter(bateBusca);
+
+    renderFiltrosEmpresa();
+
+    var cargas = candidatos.filter(bateEmpresa).sort(function (a, b) {
       var ta = a._flags.ordemMontadaTs ? a._flags.ordemMontadaTs.getTime() : 0;
       var tb = b._flags.ordemMontadaTs ? b._flags.ordemMontadaTs.getTime() : 0;
       return ta - tb;
@@ -2421,7 +2461,7 @@ window.EXP_SHEETS_CONFIG = {
     // ele — sem isso, o total do turno caía assim que ele clicava em Iniciar.
     var emSeparacao = todas.filter(function (c) {
       return c._c.status === E.STATUS.EM_SEPARACAO && !!c.operador;
-    }).filter(bateBusca);
+    }).filter(bateBusca).filter(bateEmpresa);
 
     renderResumoOperador(atribuidas.concat(emSeparacao));
 
@@ -2531,6 +2571,29 @@ window.EXP_SHEETS_CONFIG = {
     return tr;
   }
 
+  function pill(ativo, label, count, onClick) {
+    var el = document.createElement("div");
+    el.className = "tab-pill" + (ativo ? " ativo" : "");
+    el.innerHTML = esc(label) +
+      (count > 0 ? '<span class="badge-count">' + count + "</span>" : "");
+    el.addEventListener("click", onClick);
+    return el;
+  }
+
+  function renderFiltrosEmpresa() {
+    filtrosEmpresa.innerHTML = "";
+    filtrosEmpresa.appendChild(pill(!estado.filtroEmpresa, "Todas", 0, function () {
+      estado.filtroEmpresa = null;
+      render();
+    }));
+    E.EMPRESAS.forEach(function (emp) {
+      filtrosEmpresa.appendChild(pill(estado.filtroEmpresa === emp, emp, 0, function () {
+        estado.filtroEmpresa = estado.filtroEmpresa === emp ? null : emp;
+        render();
+      }));
+    });
+  }
+
   function td(html) { var e = document.createElement("td"); e.innerHTML = html; return e; }
   function esc(s) {
     return String(s == null ? "" : s)
@@ -2588,6 +2651,13 @@ window.EXP_SHEETS_CONFIG = {
   var theadDiaria = document.getElementById("rsmTheadDiaria");
   var corpoDiaria = document.getElementById("rsmCorpoDiaria");
   var captura = document.getElementById("rsmCaptura");
+  var filtrosEmpresa = document.getElementById("rsmFiltrosEmpresa");
+
+  // Filtro por empresa: guardado fora do render pra sobreviver ao re-render
+  // disparado pelo storage, e reaplicado sobre o último dado carregado quando
+  // o usuário clica num pill, sem esperar nova leitura.
+  var filtroEmpresa = null;
+  var ultimoRows = [], ultimaSeparacao = {}, ultimoCapturedAt = null;
 
   function usaFirestore() {
     return !!(E.Db && E.Db.temConfig());
@@ -2621,6 +2691,8 @@ window.EXP_SHEETS_CONFIG = {
   }
 
   function render(rows, separacao, capturedAt) {
+    ultimoRows = rows; ultimaSeparacao = separacao; ultimoCapturedAt = capturedAt;
+
     var agora = Date.now();
     var hoje = new Date(agora);
     var cargas = E.agregar(rows, separacao).map(function (c) {
@@ -2628,12 +2700,40 @@ window.EXP_SHEETS_CONFIG = {
       return c;
     });
 
-    renderStatus(cargas, hoje);
-    renderDiaria(cargas, hoje);
+    renderFiltrosEmpresa();
+    var cargasFiltradas = cargas.filter(function (c) {
+      return !filtroEmpresa || c.empresa === filtroEmpresa;
+    });
+
+    renderStatus(cargasFiltradas, hoje);
+    renderDiaria(cargasFiltradas, hoje);
 
     captura.textContent = capturedAt
       ? "capturado " + new Date(capturedAt).toLocaleString("pt-BR")
       : "sem captura";
+  }
+
+  function pill(ativo, label, count, onClick) {
+    var el = document.createElement("div");
+    el.className = "tab-pill" + (ativo ? " ativo" : "");
+    el.innerHTML = esc(label) +
+      (count > 0 ? '<span class="badge-count">' + count + "</span>" : "");
+    el.addEventListener("click", onClick);
+    return el;
+  }
+
+  function renderFiltrosEmpresa() {
+    filtrosEmpresa.innerHTML = "";
+    filtrosEmpresa.appendChild(pill(!filtroEmpresa, "Todas", 0, function () {
+      filtroEmpresa = null;
+      render(ultimoRows, ultimaSeparacao, ultimoCapturedAt);
+    }));
+    E.EMPRESAS.forEach(function (emp) {
+      filtrosEmpresa.appendChild(pill(filtroEmpresa === emp, emp, 0, function () {
+        filtroEmpresa = filtroEmpresa === emp ? null : emp;
+        render(ultimoRows, ultimaSeparacao, ultimoCapturedAt);
+      }));
+    });
   }
 
   function renderStatus(cargas, hoje) {
@@ -2807,9 +2907,12 @@ window.EXP_SHEETS_CONFIG = {
   var vazioTempoTurno = document.getElementById("dspVazioTempoTurno");
 
   var captura = document.getElementById("dspCaptura");
+  var filtrosEmpresa = document.getElementById("dspFiltrosEmpresa");
 
   var estadoTurno = "todos";
+  var filtroEmpresa = null; // null | "Dois Marcos" | "Basf" | "Multiplicação" — filtro geral da tela.
   var ultimoD = null;
+  var ultimoRows = [], ultimaSeparacao = {}, ultimoOperadoresRoster = [], ultimoCapturedAt = null;
   var jaCarregouOk = false;
 
   function usaFirestore() {
@@ -2842,6 +2945,8 @@ window.EXP_SHEETS_CONFIG = {
   }
 
   function render(rows, separacao, operadoresRoster, capturedAt) {
+    ultimoRows = rows; ultimaSeparacao = separacao; ultimoOperadoresRoster = operadoresRoster; ultimoCapturedAt = capturedAt;
+
     var agora = Date.now();
     var hoje = new Date(agora);
     var cargas = E.agregar(rows, separacao).map(function (c) {
@@ -2849,7 +2954,12 @@ window.EXP_SHEETS_CONFIG = {
       return c;
     });
 
-    ultimoD = E.desempenhoOperadores(cargas, DIAS_PARA_TRAS, hoje, operadoresRoster);
+    renderFiltrosEmpresa();
+    var cargasFiltradas = cargas.filter(function (c) {
+      return !filtroEmpresa || c.empresa === filtroEmpresa;
+    });
+
+    ultimoD = E.desempenhoOperadores(cargasFiltradas, DIAS_PARA_TRAS, hoje, operadoresRoster);
 
     renderKpis(ultimoD.operadores);
     renderResumoOperador();
@@ -3155,10 +3265,35 @@ window.EXP_SHEETS_CONFIG = {
       .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
   }
 
-  filtroTurno.querySelectorAll(".tab-pill").forEach(function (pill) {
-    pill.addEventListener("click", function () {
-      estadoTurno = pill.getAttribute("data-turno");
-      filtroTurno.querySelectorAll(".tab-pill").forEach(function (p) { p.classList.toggle("ativo", p === pill); });
+  function pill(ativo, label, count, onClick) {
+    var el = document.createElement("div");
+    el.className = "tab-pill" + (ativo ? " ativo" : "");
+    el.innerHTML = esc(label) +
+      (count > 0 ? '<span class="badge-count">' + count + "</span>" : "");
+    el.addEventListener("click", onClick);
+    return el;
+  }
+
+  // Filtro por empresa: geral da tela — refaz KPIs e todos os gráficos, por
+  // isso reaproveita o último dado carregado em vez de só re-renderizar um bloco.
+  function renderFiltrosEmpresa() {
+    filtrosEmpresa.innerHTML = "";
+    filtrosEmpresa.appendChild(pill(!filtroEmpresa, "Todas", 0, function () {
+      filtroEmpresa = null;
+      render(ultimoRows, ultimaSeparacao, ultimoOperadoresRoster, ultimoCapturedAt);
+    }));
+    E.EMPRESAS.forEach(function (emp) {
+      filtrosEmpresa.appendChild(pill(filtroEmpresa === emp, emp, 0, function () {
+        filtroEmpresa = filtroEmpresa === emp ? null : emp;
+        render(ultimoRows, ultimaSeparacao, ultimoOperadoresRoster, ultimoCapturedAt);
+      }));
+    });
+  }
+
+  filtroTurno.querySelectorAll(".tab-pill").forEach(function (elPill) {
+    elPill.addEventListener("click", function () {
+      estadoTurno = elPill.getAttribute("data-turno");
+      filtroTurno.querySelectorAll(".tab-pill").forEach(function (p) { p.classList.toggle("ativo", p === elPill); });
       renderResumoOperador();
     });
   });
