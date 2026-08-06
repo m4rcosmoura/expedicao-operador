@@ -8,41 +8,42 @@
   Tela de login única, sem escolher tipo de usuário — o sistema decide
   sozinho: se "usuário"/"senha" bater com a credencial do administrador
   (definida abaixo), entra vendo o app inteiro do admin, com abas fixas
-  embaixo da tela (Painel/Distribuição/Resumo/Desempenho — as mesmas 4
-  telas que existem na extensão do desktop, só que otimizadas pro tamanho
-  do celular); senão, se bater com o nome + PIN de um operador cadastrado
-  na Distribuição, entra vendo só as próprias cargas. Extensão (PC) e este
-  arquivo (celular) gravam no mesmo banco Firestore, então qualquer
-  atualização feita num lado aparece no outro.
+  embaixo da tela (Painel/Prioridade/Distribuição/Resumo/Desempenho — as
+  mesmas telas que existem na extensão do desktop, só que otimizadas pro
+  tamanho do celular); senão, se bater com o nome + PIN de um operador
+  cadastrado na Distribuição, entra vendo só as próprias cargas. Extensão
+  (PC) e este arquivo (celular) gravam no mesmo banco (Google Planilhas via
+  Apps Script Web App), então qualquer atualização feita num lado aparece
+  no outro.
 
   Cada aba do admin só busca dados do banco enquanto está sendo exibida
   (troca de aba dispara a busca da nova e pausa a da anterior) — economiza
-  dado móvel/bateria em vez de manter as 4 rodando ao mesmo tempo sempre.
+  dado móvel/bateria em vez de manter todas rodando ao mesmo tempo sempre.
 
   Usuário/senha do administrador: procure por "ADMIN_USUARIO"/"ADMIN_SENHA"
   mais abaixo, no script — troque os valores se quiser outra credencial.
 
-  ANTES DE ENVIAR: cole o firebaseConfig do seu projeto no objeto
-  EXP_FIREBASE_CONFIG logo abaixo (Firebase Console > Configurações do
-  projeto > Seus apps > app Web). Sem isso preenchido, a tela funciona só em
+  ANTES DE ENVIAR: cole a URL do Web App do Apps Script no objeto
+  EXP_SHEETS_CONFIG logo abaixo. Sem isso preenchido, a tela funciona só em
   modo demo local (dados não saem do próprio aparelho).
 
   Este arquivo é gerado a partir de logic.js + firestore-client.js +
-  dashboard.js + distribuicao.js + resumo.js + desempenho.js + app.js +
-  operador.js + styles.css (dashboard/distribuicao/resumo/desempenho). Se
-  qualquer um desses mudar na extensão, regenere este arquivo (peça pro
-  Claude Code refazer o empacotamento).
+  dashboard.js + prioridade.js + distribuicao.js + resumo.js + desempenho.js
+  + app.js + operador.js + styles.css (dashboard/prioridade/distribuicao/
+  resumo/desempenho). Se qualquer um desses mudar na extensão, regenere este
+  arquivo (peça pro Claude Code refazer o empacotamento).
 
   Índice das seções de <script> (na ordem em que aparecem no arquivo):
-  1. EXP_FIREBASE_CONFIG — credenciais do Firebase.
+  1. EXP_SHEETS_CONFIG — URL do Web App do Apps Script.
   2. logic.js — regras de negócio puras, compartilhadas por tudo.
-  3. firestore-client.js — cliente Firestore REST (sem SDK).
+  3. firestore-client.js (adaptado) — cliente REST do Apps Script Web App.
   4. dashboard.js (adaptado) — aba "Painel", IDs com prefixo pnl.
-  5. distribuicao.js (adaptado) — aba "Distribuição", IDs originais (sem prefixo).
-  6. resumo.js (adaptado) — aba "Resumo", IDs com prefixo rsm.
-  7. desempenho.js (adaptado) — aba "Desempenho", IDs com prefixo dsp.
-  8. app.js (adaptado) — troca de abas do admin + badge de pendências.
-  9. operador.js (adaptado) — login único, sessão, tela do Operador.
+  5. prioridade.js (adaptado) — aba "Prioridade", IDs com prefixo prd.
+  6. distribuicao.js (adaptado) — aba "Distribuição", IDs originais (sem prefixo).
+  7. resumo.js (adaptado) — aba "Resumo", IDs com prefixo rsm.
+  8. desempenho.js (adaptado) — aba "Desempenho", IDs com prefixo dsp.
+  9. app.js (adaptado) — troca de abas do admin + badge de pendências.
+  10. operador.js (adaptado) — login único, sessão, tela do Operador.
 -->
 <html lang="pt-BR">
 <head>
@@ -418,6 +419,50 @@ tbody tr.linha-pendencia td:first-child { box-shadow: inset 3px 0 0 #b26a00; }
   font-size: var(--fs-small); font-weight: 700;
 }
 
+/* Coluna "Prioridade" do Painel: número = posição só dentro do status atual;
+   o alerta saltitante marca as 5 primeiras da fila GERAL, cruzando todos os
+   status, pra chamar atenção mesmo dentro de uma aba filtrada. */
+.prioridade-rank {
+  display: inline-block; min-width: 18px; text-align: center;
+  font-weight: 700; font-variant-numeric: tabular-nums; color: var(--txt-dim);
+}
+.prioridade-alerta {
+  display: inline-block; font-size: 13px; line-height: 1;
+  animation: exp-alerta-pular .6s ease-in-out infinite;
+}
+@keyframes exp-alerta-pular {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-4px); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .prioridade-alerta { animation: none; }
+}
+
+/* ---- aba Prioridade (fila de cargas prioritárias, arrastar pra reordenar) ---- */
+#prdTabela tbody td {
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 220px;
+}
+#prdTabela tbody td.col-cliente {
+  white-space: normal; overflow: visible; text-overflow: clip; max-width: 280px;
+}
+.prioridade-controle {
+  display: inline-flex; align-items: center; gap: 8px;
+}
+.prioridade-handle {
+  cursor: grab; user-select: none; -webkit-user-select: none;
+  font-size: 14px; line-height: 1; color: var(--txt-faint); letter-spacing: -2px;
+  padding: 2px 4px; border-radius: 5px;
+}
+.prioridade-handle:hover { background: var(--navy-tint); color: var(--txt-dim); }
+.prioridade-handle:active { cursor: grabbing; }
+.prioridade-numero {
+  font-weight: 700; font-variant-numeric: tabular-nums; color: var(--txt-dim); min-width: 16px;
+}
+#prdTabela tbody tr.linha-arrastando {
+  opacity: .45; background: var(--navy-tint) !important;
+}
+#prdTabela tbody tr.linha-arrastando td { border-bottom-color: transparent; }
+
 /* ---- resumo.css extra (Resumo) ---- */
 .status-dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 8px; }
 .tabela-wrap--diaria table { width: auto; min-width: 0; }
@@ -540,6 +585,7 @@ tbody tr.linha-pendencia td:first-child { box-shadow: inset 3px 0 0 #b26a00; }
       <thead>
         <tr>
           <th>Carga Web</th>
+          <th>Prioridade</th>
           <th>Status</th>
           <th>Placa</th>
           <th id="pnlThOperador" hidden>Operador</th>
@@ -555,6 +601,35 @@ tbody tr.linha-pendencia td:first-child { box-shadow: inset 3px 0 0 #b26a00; }
       <tbody id="pnlCorpo"></tbody>
     </table>
     <div id="pnlVazio" class="vazio" hidden>Nenhuma carga encontrada.</div>
+  </div>
+</section>
+
+<section id="viewPrioridade" class="admin-view" data-view="prioridade">
+  <p class="aviso-inline" style="display:block;margin:0 0 12px">
+    Só cargas da <strong>Dois Marcos</strong> ainda não carregadas (e já com número de carga web). A numeração
+    inicial segue a chegada (mais antiga primeiro) — segure o ícone ⠿⠿ e arraste a linha para reordenar. Ao
+    carregar, a carga sai da lista e libera a posição.
+  </p>
+  <div id="prdMetaInfo" class="meta-info"></div>
+  <div class="tabela-wrap">
+    <table id="prdTabela">
+      <thead>
+        <tr>
+          <th class="num">Nº</th>
+          <th>Status</th>
+          <th>Carga Web</th>
+          <th>Tipo de Faturamento</th>
+          <th>Cliente(s)</th>
+          <th>Tipo de Frete</th>
+          <th>Placa</th>
+          <th>Cultura</th>
+          <th>Entrou na Portaria</th>
+          <th class="num">Duração total</th>
+        </tr>
+      </thead>
+      <tbody id="prdCorpo"></tbody>
+    </table>
+    <div id="prdVazio" class="vazio" hidden>Nenhuma carga prioritária no momento.</div>
   </div>
 </section>
 
@@ -823,6 +898,7 @@ tbody tr.linha-pendencia td:first-child { box-shadow: inset 3px 0 0 #b26a00; }
 
 <nav id="adminTabs" class="admin-tabs">
   <div class="tab-pill ativo" data-view="painel">Painel</div>
+  <div class="tab-pill" data-view="prioridade">Prioridade</div>
   <div class="tab-pill" data-view="distribuicao">Distribuição<span class="badge-count" id="adminBadgeDistribuicao" hidden>0</span></div>
   <div class="tab-pill" data-view="resumo">Resumo</div>
   <div class="tab-pill" data-view="desempenho">Desempenho</div>
@@ -1542,7 +1618,7 @@ window.EXP_SHEETS_CONFIG = {
 
   var E = window.Exp;
   window.Exp.AdminViews = window.Exp.AdminViews || {};
-  var estado = { rows: [], separacao: {}, operadores: [], capturedAt: null, filtro: null, filtroEmpresa: null };
+  var estado = { rows: [], separacao: {}, operadores: [], prioridade: {}, capturedAt: null, filtro: null, filtroEmpresa: null };
 
   var corpo = document.getElementById("pnlCorpo");
   var vazio = document.getElementById("pnlVazio");
@@ -1567,7 +1643,10 @@ window.EXP_SHEETS_CONFIG = {
   }
 
   // Aplica um payload no formato do getTudo (o cache tem o mesmo formato).
-  function aplicar(t) {
+  // docPrioridade vem de uma leitura separada (getDoc "estado"/"prioridade")
+  // — não faz parte do getTudo. Sem ele (leitura do cache), mantém o que já
+  // estava em estado.prioridade em vez de zerar.
+  function aplicar(t, docPrioridade) {
     var h = t && t.hisowerRows;
     estado.rows = (h && h.rows) || [];
     estado.capturedAt = (h && h.capturedAt) || null;
@@ -1577,6 +1656,7 @@ window.EXP_SHEETS_CONFIG = {
     var mapa = {};
     ((t && t.separacao) || []).forEach(function (doc) { if (doc.chaveOriginal) mapa[doc.chaveOriginal] = doc; });
     estado.separacao = mapa;
+    if (docPrioridade !== undefined) estado.prioridade = (docPrioridade && docPrioridade.mapa) || {};
     alerta.hidden = !(h && h.erroCaptura);
     alerta.textContent = (h && h.erroCaptura) || "";
     render();
@@ -1589,9 +1669,14 @@ window.EXP_SHEETS_CONFIG = {
       // não ficar em branco durante os segundos que o Apps Script leva. Os
       // dados frescos substituem isso assim que chegarem.
       if (!jaCarregouOk) aplicar(E.Db.cacheOuDemo());
-      E.Db.getTudo(explicito).then(function (t) {
+      // Prioridade (mapa {chave: numero}) vem num doc separado, o mesmo que a
+      // aba Prioridade grava — o Painel só LÊ, nunca escreve nele.
+      Promise.all([
+        E.Db.getTudo(explicito),
+        E.Db.getDoc("estado", "prioridade").catch(function () { return null; })
+      ]).then(function (res) {
         jaCarregouOk = true;
-        aplicar(t);
+        aplicar(res[0], res[1]);
       }).catch(function () {
         // Falha de leitura (rede instável, Apps Script enfileirado): mantém na
         // tela o que já está visível em vez de zerar tudo.
@@ -1702,6 +1787,69 @@ window.EXP_SHEETS_CONFIG = {
     return wrap;
   }
 
+  // Uma carga separada de forma antecipada (chave "PEND:placa") que já tinha
+  // número de prioridade e ganhou a chave real — migra o número pra chave
+  // real só pra EXIBIÇÃO (o Painel nunca grava o mapa de volta; quem faz essa
+  // reconciliação de verdade, persistindo, é a aba Prioridade).
+  function chaveComPrioridade(mapa, chavesElegiveis) {
+    var placasReais = {};
+    chavesElegiveis.forEach(function (k) {
+      if (!E.ehChavePendente(k)) placasReais[E.placaDaChave(k)] = k;
+    });
+    var novo = Object.assign({}, mapa);
+    Object.keys(novo).forEach(function (k) {
+      if (!E.ehChavePendente(k)) return;
+      var chaveReal = placasReais[E.placaDaChave(k)];
+      if (chaveReal && !(chaveReal in novo)) {
+        novo[chaveReal] = novo[k];
+        delete novo[k];
+      }
+    });
+    return novo;
+  }
+
+  // Mesmo critério/ordenação da aba Prioridade — duplicado aqui só pra
+  // EXIBIÇÃO. Marca em cada carga elegível (Dois Marcos, não Carregado, com
+  // Prog. Web) a posição dela na fila geral (c._prioridadeGlobal) e a posição
+  // só entre as do mesmo status (c._prioridadeLocal).
+  function aplicarPrioridade(cargas) {
+    var elegiveis = cargas.filter(function (c) {
+      return c.empresa === "Dois Marcos" && c._c.status !== E.STATUS.CARREGADO &&
+        E.isFilled(c.progWeb) && c.progWeb !== "—";
+    });
+    var mapa = chaveComPrioridade(estado.prioridade, elegiveis.map(function (c) { return c.chave; }));
+
+    var comNumero = [], semNumero = [];
+    elegiveis.forEach(function (c) {
+      if (mapa[c.chave] != null) comNumero.push(c); else semNumero.push(c);
+    });
+    comNumero.sort(function (a, b) { return (mapa[a.chave] || 0) - (mapa[b.chave] || 0); });
+    semNumero.sort(function (a, b) {
+      var ta = a.entrouPortariaTs ? a.entrouPortariaTs.getTime() : 0;
+      var tb = b.entrouPortariaTs ? b.entrouPortariaTs.getTime() : 0;
+      return ta - tb;
+    });
+
+    var porStatus = {};
+    comNumero.concat(semNumero).forEach(function (c, i) {
+      c._prioridadeGlobal = i + 1;
+      porStatus[c._c.status] = (porStatus[c._c.status] || 0) + 1;
+      c._prioridadeLocal = porStatus[c._c.status];
+    });
+  }
+
+  // Número = posição só entre as cargas do MESMO status (c._prioridadeLocal);
+  // "—" pra quem não entra na fila. As 5 primeiras da fila GERAL
+  // (c._prioridadeGlobal, cruzando todos os status) ganham um alerta
+  // saltitante, pra saltar aos olhos.
+  function prioridadeCelulaHtml(c) {
+    if (c._prioridadeLocal == null) return "—";
+    var alertaHtml = c._prioridadeGlobal <= 5
+      ? ' <span class="prioridade-alerta" title="Uma das 5 cargas mais prioritárias no geral">❗</span>'
+      : "";
+    return '<span class="prioridade-rank">' + c._prioridadeLocal + "</span>" + alertaHtml;
+  }
+
   function render() {
     var agora = Date.now();
     var hoje = new Date(agora);
@@ -1713,6 +1861,7 @@ window.EXP_SHEETS_CONFIG = {
       if (c._c.status !== E.STATUS.CARREGADO) return true;
       return E.mesmoDia(c._c.desde, hoje);
     });
+    aplicarPrioridade(cargas);
 
     var cargasDaEmpresa = cargas.filter(function (c) {
       return !estado.filtroEmpresa || c.empresa === estado.filtroEmpresa;
@@ -1808,6 +1957,7 @@ window.EXP_SHEETS_CONFIG = {
     }
 
     var tdCarga = td('<span class="carga-web">' + esc(c.progWeb) + "</span>");
+    var tdPrioridade = td(prioridadeCelulaHtml(c));
     var tdStatus = td('<span class="status-badge" style="background:' + cor + '">' + esc(c._c.status) + "</span>");
     var tdPlaca = td('<span class="placa">' + esc(c.placa) + "</span>");
 
@@ -1845,7 +1995,7 @@ window.EXP_SHEETS_CONFIG = {
     tdAcao.hidden = !mostraAcao;
     if (mostraAcao) tdAcao.appendChild(controleAcao(c));
 
-    [tdCarga, tdStatus, tdPlaca, tdOperador, tdPendencia, tdEmpresa, tdCultura, tdEntrou, tdDuracao, tdTotal, tdAcao].forEach(function (x) {
+    [tdCarga, tdPrioridade, tdStatus, tdPlaca, tdOperador, tdPendencia, tdEmpresa, tdCultura, tdEntrou, tdDuracao, tdTotal, tdAcao].forEach(function (x) {
       tr.appendChild(x);
     });
     return tr;
@@ -1866,6 +2016,324 @@ window.EXP_SHEETS_CONFIG = {
   function ativar() { carregar(!jaCarregouOk); intervalId = setInterval(function () { carregar(false); }, 30000); }
   function desativar() { if (intervalId) { clearInterval(intervalId); intervalId = null; } }
   window.Exp.AdminViews.painel = { ativar: ativar, desativar: desativar, recarregar: function () { carregar(true); } };
+})();
+</script>
+
+<script>
+/* ==================== prioridade.js (adaptado: Firestore em vez de chrome.storage, IDs com prefixo prd) ====================
+   Fila única (só Dois Marcos, sem Carregado, sem carga sem Prog. Web)
+   ordenada por um número que se reordena arrastando a linha (segurar no
+   ícone ⠿⠿ e arrastar). Guarda o número de cada carga em "estado/prioridade"
+   ({ mapa: { chave: numero } }) — mesmo doc usado pela extensão (Armazém e
+   Visitante), então uma reordenação feita aqui aparece lá e vice-versa.
+   Arrastar exige senha (ver SENHA_PRIORIDADE), pedida uma vez por aba aberta. */
+(function () {
+  "use strict";
+
+  var E = window.Exp;
+  window.Exp.AdminViews = window.Exp.AdminViews || {};
+  var estado = { rows: [], separacao: {}, prioridade: {}, capturedAt: null, ordenada: [] };
+
+  var corpo = document.getElementById("prdCorpo");
+  var vazio = document.getElementById("prdVazio");
+  var metaInfo = document.getElementById("prdMetaInfo");
+
+  // Enquanto uma linha está sendo arrastada, nenhum re-render automático
+  // pode acontecer — ele reconstruiria a tbody inteira embaixo do mouse e
+  // cortaria o arrasto na metade.
+  var arrastoAtivo = false;
+  var chaveArrastando = null;
+  // Ordem das chaves (por data-chave) no momento em que o arrasto começou —
+  // usada em finalizarArrasto pra saber se algo de fato mudou.
+  var ordemAoIniciarArrasto = null;
+
+  function usaFirestore() {
+    return !!(E.Db && E.Db.temConfig());
+  }
+
+  var jaCarregouOk = false;
+
+  // Aplica um payload no formato do getTudo. docPrioridade vem de uma
+  // leitura separada (getDoc "estado"/"prioridade") — sem ele (leitura do
+  // cache), mantém o que já estava em estado.prioridade.
+  function aplicar(t, docPrioridade) {
+    var h = t && t.hisowerRows;
+    estado.rows = (h && h.rows) || [];
+    estado.capturedAt = (h && h.capturedAt) || null;
+    var mapa = {};
+    ((t && t.separacao) || []).forEach(function (doc) { if (doc.chaveOriginal) mapa[doc.chaveOriginal] = doc; });
+    estado.separacao = mapa;
+    if (docPrioridade !== undefined) estado.prioridade = (docPrioridade && docPrioridade.mapa) || {};
+    render();
+  }
+
+  function carregar(explicito) {
+    if (usaFirestore()) {
+      if (!jaCarregouOk) aplicar(E.Db.cacheOuDemo());
+      Promise.all([
+        E.Db.getTudo(explicito),
+        E.Db.getDoc("estado", "prioridade").catch(function () { return null; })
+      ]).then(function (res) {
+        jaCarregouOk = true;
+        aplicar(res[0], res[1]);
+      }).catch(function () {
+        // Mantém o que já está na tela em vez de zerar tudo.
+      });
+    } else {
+      aplicar(E.Db.cacheOuDemo());
+    }
+  }
+
+  // Grava o mapa {chave: numero} inteiro — reordenar move mais de uma carga
+  // por vez, então persiste sempre a lista toda (não por patch).
+  function persistirMapa(mapa) {
+    estado.prioridade = mapa;
+    if (usaFirestore()) {
+      E.Db.setDoc("estado", "prioridade", { mapa: mapa }).catch(function (e) {
+        console.warn("Falha ao gravar prioridade:", e);
+      });
+    } else {
+      try {
+        var demo = JSON.parse(localStorage.getItem("exp_demo") || "{}");
+        demo.prioridadeMapa = mapa;
+        localStorage.setItem("exp_demo", JSON.stringify(demo));
+      } catch (e) { /* ignore */ }
+    }
+  }
+
+  // Uma carga separada de forma antecipada (chave "PEND:placa") que já tinha
+  // número de prioridade e ganhou a chave real — migra o número pra chave
+  // real, senão a carga perderia a posição assim que "Entrou na Portaria"
+  // existisse.
+  function reconciliarMapa(mapa, chavesElegiveis) {
+    var placasReais = {};
+    chavesElegiveis.forEach(function (k) {
+      if (!E.ehChavePendente(k)) placasReais[E.placaDaChave(k)] = k;
+    });
+    var novo = Object.assign({}, mapa);
+    var mudou = false;
+    Object.keys(novo).forEach(function (k) {
+      if (!E.ehChavePendente(k)) return;
+      var chaveReal = placasReais[E.placaDaChave(k)];
+      if (chaveReal && !(chaveReal in novo)) {
+        novo[chaveReal] = novo[k];
+        delete novo[k];
+        mudou = true;
+      }
+    });
+    return { mapa: novo, mudou: mudou };
+  }
+
+  // Quem já tem número entra por ele (crescente); quem não tem entra depois,
+  // por ordem de chegada (mais antiga primeiro). Sempre devolve os números
+  // renumerados 1..N sem buracos (cobre a limpeza automática de cargas que
+  // saíram da lista).
+  function calcularOrdem(cargas, mapa) {
+    var comNumero = [], semNumero = [];
+    cargas.forEach(function (c) {
+      if (mapa[c.chave] != null) comNumero.push(c); else semNumero.push(c);
+    });
+    comNumero.sort(function (a, b) { return (mapa[a.chave] || 0) - (mapa[b.chave] || 0); });
+    semNumero.sort(function (a, b) {
+      var ta = a.entrouPortariaTs ? a.entrouPortariaTs.getTime() : 0;
+      var tb = b.entrouPortariaTs ? b.entrouPortariaTs.getTime() : 0;
+      return ta - tb;
+    });
+    var ordenada = comNumero.concat(semNumero);
+    var novoMapa = {};
+    ordenada.forEach(function (c, i) { novoMapa[c.chave] = i + 1; });
+    return { ordenada: ordenada, mapa: novoMapa };
+  }
+
+  function mapasIguais(a, b) {
+    var ka = Object.keys(a), kb = Object.keys(b);
+    if (ka.length !== kb.length) return false;
+    return ka.every(function (k) { return a[k] === b[k]; });
+  }
+
+  function render() {
+    var agora = Date.now();
+    var cargas = E.agregar(estado.rows, estado.separacao).map(function (c) {
+      c._c = E.computar(c, agora);
+      return c;
+    });
+
+    var elegiveis = cargas.filter(function (c) {
+      return c.empresa === "Dois Marcos" && c._c.status !== E.STATUS.CARREGADO &&
+        E.isFilled(c.progWeb) && c.progWeb !== "—";
+    });
+
+    var rec = reconciliarMapa(estado.prioridade, elegiveis.map(function (c) { return c.chave; }));
+    var calc = calcularOrdem(elegiveis, rec.mapa);
+    estado.ordenada = calc.ordenada;
+
+    // Persiste só quando algo de fato mudou (renumeração/limpeza automática
+    // ou a reconciliação do órfão) — sem isso, gravaria a cada render à toa.
+    if (rec.mudou || !mapasIguais(calc.mapa, estado.prioridade)) {
+      persistirMapa(calc.mapa);
+    } else {
+      estado.prioridade = calc.mapa;
+    }
+
+    corpo.innerHTML = "";
+    calc.ordenada.forEach(function (c, i) { corpo.appendChild(linha(c, i)); });
+
+    vazio.hidden = calc.ordenada.length > 0;
+    metaInfo.textContent = calc.ordenada.length + " carga(s)" +
+      (estado.capturedAt ? " · atualizado " + new Date(estado.capturedAt).toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" }) : "");
+  }
+
+  // Fim do arrasto: lê a ordem final direto do DOM. Só pede senha (e só
+  // grava) se a ordem de fato mudou — um clique sem arrastar não deve
+  // incomodar ninguém com o prompt.
+  function finalizarArrasto() {
+    if (!chaveArrastando) return;
+    var ordemAnterior = ordemAoIniciarArrasto;
+    var chaves = Array.prototype.map.call(corpo.children, function (tr) {
+      return tr.getAttribute("data-chave");
+    });
+    chaveArrastando = null;
+    arrastoAtivo = false;
+    ordemAoIniciarArrasto = null;
+
+    var mudou = !ordemAnterior || chaves.length !== ordemAnterior.length ||
+      chaves.some(function (ch, i) { return ch !== ordemAnterior[i]; });
+    if (!mudou) return;
+
+    if (!senhaConfirmada() && !pedirSenha()) {
+      render(); // desfaz a reordenação visual — sem senha, nada é gravado.
+      return;
+    }
+
+    var novoMapa = {};
+    chaves.forEach(function (ch, i) { novoMapa[ch] = i + 1; });
+    persistirMapa(novoMapa);
+    render();
+  }
+
+  function linha(c, i) {
+    var tr = document.createElement("tr");
+    tr.setAttribute("data-chave", c.chave);
+    var cor = E.corStatus(c._c.status);
+
+    var tdNum = document.createElement("td");
+    tdNum.className = "num";
+    tdNum.appendChild(controlePrioridade(c.chave, i));
+
+    var tdStatus = td('<span class="status-badge" style="background:' + cor + '">' + esc(c._c.status) + "</span>");
+    var tdCarga = td('<span class="carga-web">' + esc(c.progWeb) + "</span>");
+    var tdFaturamento = td(esc(c.tipoFaturamento));
+    var tdCliente = td(esc(c.cliente), "col-cliente");
+    var tdFrete = td(esc(c.tipoFrete));
+    var tdPlaca = td('<span class="placa">' + esc(c.placa) + "</span>");
+    var tdCultura = td(esc(c.cultura));
+    var tdEntrou = td(esc(c.entrouPortaria));
+
+    var nivelTotal = E.nivelTempoTotal(c._c.duracaoTotalMs);
+    var tdTotal = td(E.fmtDur(c._c.duracaoTotalMs), "num" + (nivelTotal ? " nivel-" + nivelTotal : ""));
+
+    [tdNum, tdStatus, tdCarga, tdFaturamento, tdCliente, tdFrete, tdPlaca, tdCultura, tdEntrou, tdTotal]
+      .forEach(function (x) { tr.appendChild(x); });
+
+    // Reordenação por arrasto: o alvo do dragover é a LINHA (não só o
+    // ícone) — só quem *inicia* o arrasto é o ícone (draggable fica só
+    // nele, ver controlePrioridade).
+    tr.addEventListener("dragover", function (e) {
+      if (!chaveArrastando || chaveArrastando === c.chave) return;
+      e.preventDefault();
+      var arrastando = corpo.querySelector('tr[data-chave="' + cssEsc(chaveArrastando) + '"]');
+      if (!arrastando || arrastando === tr) return;
+      var rect = tr.getBoundingClientRect();
+      var antes = (e.clientY - rect.top) < rect.height / 2;
+      corpo.insertBefore(arrastando, antes ? tr : tr.nextSibling);
+    });
+    tr.addEventListener("drop", function (e) { e.preventDefault(); });
+
+    return tr;
+  }
+
+  // Escapa a chave pra uso dentro de um seletor CSS (attribute selector).
+  function cssEsc(s) {
+    return String(s).replace(/["\\]/g, "\\$&");
+  }
+
+  // Trava simples pra quem pode arrastar — pedida uma vez por aba aberta
+  // (guardada em sessionStorage, some ao fechar a aba).
+  var SENHA_PRIORIDADE = "comercial@2025";
+  var CHAVE_SESSAO_SENHA = "exp_prioridade_senha_ok";
+
+  function senhaConfirmada() {
+    try { return sessionStorage.getItem(CHAVE_SESSAO_SENHA) === "1"; } catch (e) { return false; }
+  }
+
+  // Pede a senha (bloqueante) e já libera pra sempre nesta aba se acertar.
+  function pedirSenha() {
+    var v = window.prompt("Senha para alterar a prioridade:");
+    if (v === SENHA_PRIORIDADE) {
+      try { sessionStorage.setItem(CHAVE_SESSAO_SENHA, "1"); } catch (e) { /* ignore */ }
+      return true;
+    }
+    if (v != null) window.alert("Senha incorreta.");
+    return false;
+  }
+
+  // Ícone de arrasto (⠿⠿) + número da posição atual — a reordenação é só
+  // "segurar e arrastar" a linha pelo ícone, sem input nem setas. Só pede
+  // senha no MOMENTO DE SOLTAR (ver finalizarArrasto), não ao simplesmente
+  // clicar/segurar.
+  function controlePrioridade(chave, i) {
+    var wrap = document.createElement("span");
+    wrap.className = "prioridade-controle";
+
+    var handle = document.createElement("span");
+    handle.className = "prioridade-handle";
+    handle.draggable = true;
+    handle.title = "Arraste para reordenar";
+    handle.textContent = "⠿⠿";
+    handle.addEventListener("dragstart", function (e) {
+      chaveArrastando = chave;
+      arrastoAtivo = true;
+      ordemAoIniciarArrasto = Array.prototype.map.call(corpo.children, function (tr) {
+        return tr.getAttribute("data-chave");
+      });
+      e.dataTransfer.effectAllowed = "move";
+      try { e.dataTransfer.setData("text/plain", chave); } catch (err) { /* alguns navegadores exigem isso pra iniciar o arrasto */ }
+      var tr = handle.closest("tr");
+      if (tr) tr.classList.add("linha-arrastando");
+    });
+    handle.addEventListener("dragend", function () {
+      var tr = handle.closest("tr");
+      if (tr) tr.classList.remove("linha-arrastando");
+      finalizarArrasto();
+    });
+
+    var numero = document.createElement("span");
+    numero.className = "prioridade-numero";
+    numero.textContent = String(i + 1);
+
+    wrap.appendChild(handle);
+    wrap.appendChild(numero);
+    return wrap;
+  }
+
+  function td(html, cls) {
+    var e = document.createElement("td");
+    if (cls) e.className = cls;
+    e.innerHTML = html;
+    return e;
+  }
+  function esc(s) {
+    return String(s == null ? "" : s)
+      .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  }
+
+  var intervalId = null;
+  function ativar() {
+    carregar(!jaCarregouOk);
+    intervalId = setInterval(function () { if (!arrastoAtivo) carregar(false); }, 30000);
+  }
+  function desativar() { if (intervalId) { clearInterval(intervalId); intervalId = null; } }
+  window.Exp.AdminViews.prioridade = { ativar: ativar, desativar: desativar, recarregar: function () { carregar(true); } };
 })();
 </script>
 
@@ -3564,7 +4032,7 @@ window.EXP_SHEETS_CONFIG = {
   }
 
   function abaInicial() {
-    var validas = ["painel", "distribuicao", "resumo", "desempenho"];
+    var validas = ["painel", "prioridade", "distribuicao", "resumo", "desempenho"];
     var achada = partesDoHash().filter(function (p) { return validas.indexOf(p) !== -1; })[0];
     return achada || "painel";
   }
