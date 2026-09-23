@@ -12,8 +12,7 @@
   mesmas telas que existem na extensão do desktop, só que otimizadas pro
   tamanho do celular); senão, se bater com o nome + PIN de um operador
   cadastrado na Distribuição, entra vendo só as próprias cargas. Extensão
-  (PC) e este arquivo (celular) gravam no mesmo banco (Google Planilhas via
-  Apps Script Web App), então qualquer atualização feita num lado aparece
+  (PC) e este arquivo (celular) gravam no mesmo banco (Supabase), então qualquer atualização feita num lado aparece
   no outro.
 
   Cada aba do admin só busca dados do banco enquanto está sendo exibida
@@ -23,8 +22,8 @@
   Usuário/senha do administrador: procure por "ADMIN_USUARIO"/"ADMIN_SENHA"
   mais abaixo, no script — troque os valores se quiser outra credencial.
 
-  ANTES DE ENVIAR: cole a URL do Web App do Apps Script no objeto
-  EXP_SHEETS_CONFIG logo abaixo. Sem isso preenchido, a tela funciona só em
+  ANTES DE ENVIAR: confira a URL/chave do Supabase no objeto
+  EXP_SUPABASE_CONFIG logo abaixo. Sem isso preenchido, a tela funciona só em
   modo demo local (dados não saem do próprio aparelho).
 
   Este arquivo é gerado a partir de logic.js + firestore-client.js +
@@ -34,9 +33,9 @@
   arquivo (peça pro Claude Code refazer o empacotamento).
 
   Índice das seções de <script> (na ordem em que aparecem no arquivo):
-  1. EXP_SHEETS_CONFIG — URL do Web App do Apps Script.
+  1. EXP_SUPABASE_CONFIG — URL e chave pública do Supabase.
   2. logic.js — regras de negócio puras, compartilhadas por tudo.
-  3. firestore-client.js (adaptado) — cliente REST do Apps Script Web App.
+  3. firestore-client.js — cliente REST do Supabase (+ cache no aparelho).
   4. dashboard.js (adaptado) — aba "Painel", IDs com prefixo pnl.
   5. prioridade.js (adaptado) — aba "Prioridade", IDs com prefixo prd.
   6. distribuicao.js (adaptado) — aba "Distribuição", IDs originais (sem prefixo).
@@ -939,11 +938,13 @@ tbody tr.linha-pendencia td:first-child { box-shadow: inset 3px 0 0 #b26a00; }
 </section>
 
 <script>
-/* ==================== EXP_SHEETS_CONFIG ====================
-   Cole aqui a URL do Web App do Apps Script antes de enviar este arquivo pro
-   celular. Enquanto ficar vazia, roda em modo demo local. */
-window.EXP_SHEETS_CONFIG = {
-  webAppUrl: "https://script.google.com/macros/s/AKfycbwm4VdrV25DcRHVMT-6qLcvPXhaBhubdJsP66FBYHPdmEhNu_9Y8BPL_d_SYQc7Olbp/exec"
+/* ==================== EXP_SUPABASE_CONFIG ====================
+   Projeto Supabase (mesmo da extensão — ver extension/firestore-client.js).
+   A chave é a PÚBLICA (publishable/anon); nunca colocar a service_role aqui.
+   Com "url" vazio, roda em modo demo local. */
+window.EXP_SUPABASE_CONFIG = {
+  url: "https://idryogpumlfyowkfimvh.supabase.co",
+  key: "sb_publishable_gwxYavQSzg3xmus73ljjjg_lXbl9UYH"
 };
 </script>
 
@@ -1444,27 +1445,21 @@ window.EXP_SHEETS_CONFIG = {
 </script>
 
 <script>
-/* ==================== firestore-client.js (adaptado: Google Sheets via Apps Script Web App) ==================== */
+/* ==================== firestore-client.js (Supabase — mesmo arquivo da extensão, + cache no aparelho) ==================== */
 (function () {
   "use strict";
 
-  var CONFIG = window.EXP_SHEETS_CONFIG || null;
+  // "self" existe tanto em página normal (== window) quanto no service worker
+  // do background.js (onde "window" não existe).
+  var CONFIG = self.EXP_SUPABASE_CONFIG || null;
 
   function temConfig() {
-    return !!(CONFIG && CONFIG.webAppUrl);
+    return !!(CONFIG && CONFIG.url && CONFIG.key);
   }
 
-  // Timeout de segurança pra qualquer chamada ao Web App. Em alguns contextos
-  // (ex.: o arquivo aberto via WhatsApp/Mensagens no iPhone, que roda a
-  // página numa aba sandboxada) o fetch() nunca resolve NEM rejeita — sem
-  // isso, a tela de login fica travada pra sempre esperando uma resposta que
-  // nunca chega. Com o timeout, o .catch() de cada chamada dispara
-  // normalmente e a tela cai pro modo local/offline.
-  // 30s (e não 10s como na versão Firestore): o Apps Script é bem mais lento
-  // que o Firestore — uma leitura normal leva 1,5-3s, e sob concorrência pode
-  // passar de 10s. Com 10s, parte das leituras era abortada por engano e a
-  // tela ficava zerada. O timeout continua existindo pra não travar pra
-  // sempre (é o que corrigiu o congelamento no iPhone), só com folga real.
+  // Timeout de segurança pra qualquer chamada — sem isso, um fetch() que
+  // nunca resolve nem rejeita (rede instável, navegador sandboxado no
+  // iPhone) trava a tela pra sempre esperando resposta.
   var FETCH_TIMEOUT_MS = 30000;
   function fetchComTimeout(url, opts) {
     return new Promise(function (resolve, reject) {
@@ -1472,7 +1467,7 @@ window.EXP_SHEETS_CONFIG = {
       var timer = setTimeout(function () {
         if (atendido) return;
         atendido = true;
-        reject(new Error("Tempo esgotado ao conectar com a planilha."));
+        reject(new Error("Tempo esgotado ao conectar com o banco."));
       }, FETCH_TIMEOUT_MS);
       fetch(url, opts).then(function (res) {
         if (atendido) return;
@@ -1488,101 +1483,47 @@ window.EXP_SHEETS_CONFIG = {
     });
   }
 
-  // Busca compartilhada do getTudo — ver o mesmo trecho em
-  // extension/firestore-client.js pra explicação completa. Aqui: pedidos
-  // simultâneos (aba do admin + badge + getDoc de prioridade) viram uma
-  // requisição só, e uma resposta de menos de MEMO_MS é reaproveitada. Leitura
-  // pedida com gravação em voo espera a gravação terminar e nunca reaproveita
-  // resposta de antes dela (ver "geracao").
-  var MEMO_MS = 10000;
-  var memoTexto = null, memoEm = 0;
-  var buscaEmVoo = null; // { gen, promise }
-  var escritasEmVoo = [];
-  var geracao = 0;
+  // ---- Chamadas REST do Supabase ----
 
-  function buscarTudoTexto(ignorarMemo) {
-    if (buscaEmVoo && buscaEmVoo.gen === geracao) return buscaEmVoo.promise;
-    if (!ignorarMemo && memoTexto && Date.now() - memoEm < MEMO_MS) return Promise.resolve(memoTexto);
+  function cabecalhos(extra) {
+    var h = { apikey: CONFIG.key, "Content-Type": "application/json" };
+    Object.keys(extra || {}).forEach(function (k) { h[k] = extra[k]; });
+    return h;
+  }
 
-    var gen = geracao;
-    var espera = escritasEmVoo.length
-      ? Promise.all(escritasEmVoo.map(function (p) { return p.catch(function () { /* só esperar */ }); }))
-      : Promise.resolve();
-    var promise = espera.then(function () {
-      return fetchComTimeout(CONFIG.webAppUrl + "?action=getTudo");
+  // Devolve o texto da resposta; erro HTTP vira exceção com a mensagem do banco.
+  function chamar(metodo, caminho, corpo, extra) {
+    return fetchComTimeout(CONFIG.url + caminho, {
+      method: metodo,
+      headers: cabecalhos(extra),
+      body: corpo === undefined ? undefined : JSON.stringify(corpo)
     }).then(function (res) {
-      if (!res.ok) throw new Error("Planilha getTudo HTTP " + res.status);
-      return res.text();
-    }).then(function (txt) {
-      // O Google às vezes responde 200 com uma página HTML de erro.
-      if (String(txt).trim().charAt(0) !== "{") throw new Error("Resposta inválida da planilha.");
-      if (gen === geracao) { memoTexto = txt; memoEm = Date.now(); }
-      gravarCache(txt);
-      return txt;
-    });
-    var registro = { gen: gen, promise: promise };
-    buscaEmVoo = registro;
-    function limpar() { if (buscaEmVoo === registro) buscaEmVoo = null; }
-    promise.then(limpar, limpar);
-    return promise;
-  }
-
-  function registrarEscrita(p) {
-    geracao++;
-    memoTexto = null;
-    escritasEmVoo.push(p);
-    function tirar() {
-      var i = escritasEmVoo.indexOf(p);
-      if (i > -1) escritasEmVoo.splice(i, 1);
-    }
-    p.then(tirar, tirar);
-    return p;
-  }
-
-  // Documentos que já vêm dentro do getTudo (Code.gs novo) — getDoc deles
-  // reaproveita a mesma busca. Com o Code.gs antigo, cai no getDoc de rede.
-  var IDS_DO_TUDO = { prioridade: true, entregaOrdem: true };
-
-  function getDocRede(colecao, id) {
-    var url = CONFIG.webAppUrl + "?action=getDoc&colecao=" + encodeURIComponent(colecao) + "&id=" + encodeURIComponent(id);
-    return fetchComTimeout(url).then(function (res) {
-      if (!res.ok) throw new Error("Planilha getDoc HTTP " + res.status);
-      return res.json();
-    });
-  }
-
-  function getDoc(colecao, id) {
-    if (!temConfig()) return Promise.reject(new Error("Web App não configurado."));
-    if (colecao === "estado" && IDS_DO_TUDO[id]) {
-      return buscarTudoTexto(false).then(function (txt) {
-        var t = JSON.parse(txt);
-        if (Object.prototype.hasOwnProperty.call(t, id)) return t[id];
-        return getDocRede(colecao, id);
+      return res.text().then(function (txt) {
+        if (!res.ok) throw new Error("Banco HTTP " + res.status + (txt ? ": " + txt.slice(0, 200) : ""));
+        return txt;
       });
-    }
-    return getDocRede(colecao, id);
-  }
-
-  function listCollection(colecao) {
-    if (!temConfig()) return Promise.reject(new Error("Web App não configurado."));
-    var url = CONFIG.webAppUrl + "?action=listCollection&colecao=" + encodeURIComponent(colecao);
-    return fetchComTimeout(url).then(function (res) {
-      if (!res.ok) throw new Error("Planilha listCollection HTTP " + res.status);
-      return res.json();
     });
   }
 
-  // Traz hisowerRows + operadores + separacao numa requisição só — cada tela
-  // fazia 3 chamadas em paralelo, e com várias telas/aparelhos atualizando ao
-  // mesmo tempo o Apps Script enfileirava o excesso e parte das leituras
-  // estourava o tempo, deixando tudo zerado.
+  function rpc(funcao, args) {
+    return chamar("POST", "/rest/v1/rpc/" + funcao, args || {});
+  }
+
+  function eq(valor) {
+    return "eq." + encodeURIComponent(String(valor));
+  }
+
+  // separacao: nomes das colunas no banco <-> campos usados pelas telas.
+  var COLUNAS_SEPARACAO = { chaveOriginal: "chave_original", operador: "operador", inicioEm: "inicio_em", fimEm: "fim_em" };
+
+  function separacaoDoBanco(l) {
+    return { id: l.id, _id: l.id, chaveOriginal: l.chave_original, operador: l.operador, inicioEm: l.inicio_em, fimEm: l.fim_em };
+  }
+
   // Última resposta boa, guardada no aparelho. Serve pra pintar a tela na
-  // hora ao abrir/recarregar: o Apps Script leva alguns segundos, e sem isso
-  // a página ficava totalmente em branco até a resposta chegar.
+  // hora ao abrir/recarregar, e como "últimos dados salvos" sem conexão.
   var CACHE_KEY = "exp_cache";
 
-  // Recebe o texto JSON já pronto da resposta (mesmo conteúdo que antes era
-  // re-serializado aqui).
   function gravarCache(txt) {
     try { localStorage.setItem(CACHE_KEY, txt); } catch (e) { /* cota cheia: segue sem cache */ }
   }
@@ -1602,32 +1543,146 @@ window.EXP_SHEETS_CONFIG = {
     };
   }
 
-  // Faixa "atualizando" no topo. Conta requisições em voo porque as telas do
-  // admin podem buscar em paralelo — só some quando a última terminar.
+  // ---- Núcleo compartilhado: uma busca só pra todas as telas ----
+  //
+  // O app.html abre as 5 telas ao mesmo tempo (iframes), e cada uma buscava
+  // tudo sozinha a cada 30s — mais o badge do shell. Cada iframe usa o núcleo
+  // do shell (a página-mãe) quando existe: pedidos simultâneos viram uma
+  // requisição só, e uma resposta de menos de MEMO_MS é reaproveitada.
+  //
+  // Leitura depois de gravação: toda gravação passa pelo núcleo. Enquanto
+  // houver gravação em voo, uma leitura nova espera ela terminar antes de
+  // buscar, e nenhuma resposta de antes da gravação é reaproveitada (ver
+  // "geracao") — sem isso a tela buscaria o dado velho e desfaria na tela o
+  // que o usuário acabou de fazer.
+  var MEMO_MS = 10000;
+
+  function criarNucleo() {
+    var memoTexto = null, memoEm = 0;
+    var buscaEmVoo = null; // { gen, promise }
+    var escritasEmVoo = [];
+    var geracao = 0;
+
+    function buscarTudoTexto(ignorarMemo) {
+      if (buscaEmVoo && buscaEmVoo.gen === geracao) return buscaEmVoo.promise;
+      if (!ignorarMemo && memoTexto && Date.now() - memoEm < MEMO_MS) return Promise.resolve(memoTexto);
+
+      var gen = geracao;
+      var espera = escritasEmVoo.length
+        ? Promise.all(escritasEmVoo.map(function (p) { return p.catch(function () { /* só esperar */ }); }))
+        : Promise.resolve();
+      var promise = espera.then(function () {
+        return rpc("get_tudo");
+      }).then(function (txt) {
+        if (String(txt).trim().charAt(0) !== "{") throw new Error("Resposta inválida do banco.");
+        if (gen === geracao) { memoTexto = txt; memoEm = Date.now(); }
+        gravarCache(txt);
+        return txt;
+      });
+      var registro = { gen: gen, promise: promise };
+      buscaEmVoo = registro;
+      function limpar() { if (buscaEmVoo === registro) buscaEmVoo = null; }
+      promise.then(limpar, limpar);
+      return promise;
+    }
+
+    function registrarEscrita(p) {
+      geracao++;
+      memoTexto = null;
+      escritasEmVoo.push(p);
+      function tirar() {
+        var i = escritasEmVoo.indexOf(p);
+        if (i > -1) escritasEmVoo.splice(i, 1);
+      }
+      p.then(tirar, tirar);
+      return p;
+    }
+
+    return { buscarTudoTexto: buscarTudoTexto, registrarEscrita: registrarEscrita };
+  }
+
+  var nucleoProprio = criarNucleo();
+
+  // Núcleo do shell (app.html/visitante.html) se esta página estiver dentro
+  // dele; senão o próprio. Resolvido a cada chamada, não no carregamento: o
+  // iframe pode rodar os scripts antes do shell terminar os dele. No service
+  // worker não há parent (fica com o próprio).
+  function nucleo() {
+    try {
+      var p = self.parent;
+      if (p && p !== self && p.Exp && p.Exp.Db && p.Exp.Db._nucleo) return p.Exp.Db._nucleo;
+    } catch (e) { /* outra origem — não acontece na extensão */ }
+    return nucleoProprio;
+  }
+
+  // Documentos que já vêm dentro do get_tudo — getDoc deles reaproveita a
+  // mesma busca em vez de ir ao banco de novo.
+  var IDS_DO_TUDO = { hisowerRows: true, operadores: true, prioridade: true, entregaOrdem: true };
+
+  function getDoc(colecao, id) {
+    if (!temConfig()) return Promise.reject(new Error("Banco não configurado."));
+    if (colecao === "estado" && IDS_DO_TUDO[id]) {
+      return nucleo().buscarTudoTexto(false).then(function (txt) {
+        var v = JSON.parse(txt)[id];
+        return v === undefined ? null : v;
+      });
+    }
+    if (colecao === "estado") {
+      return chamar("GET", "/rest/v1/estado?select=dados&id=" + eq(id)).then(function (txt) {
+        var l = JSON.parse(txt);
+        return l.length ? l[0].dados : null;
+      });
+    }
+    if (colecao === "separacao") {
+      return chamar("GET", "/rest/v1/separacao?select=*&id=" + eq(id)).then(function (txt) {
+        var l = JSON.parse(txt);
+        return l.length ? separacaoDoBanco(l[0]) : null;
+      });
+    }
+    return Promise.resolve(null);
+  }
+
+  function listCollection(colecao) {
+    if (!temConfig()) return Promise.reject(new Error("Banco não configurado."));
+    if (colecao !== "separacao") return Promise.resolve([]);
+    return chamar("GET", "/rest/v1/separacao?select=*").then(function (txt) {
+      return JSON.parse(txt).map(separacaoDoBanco);
+    });
+  }
+
+  // Faixa "Atualizando…" no topo da página. Conta requisições em voo porque
+  // pode haver mais de uma tela buscando ao mesmo tempo (os iframes do
+  // app.html) — só some quando a última terminar. Em service worker não há
+  // document; o getElementById simplesmente não acha nada e segue.
   var emVoo = 0;
+  function faixa() {
+    return (typeof document !== "undefined") ? document.getElementById("faixaCarregando") : null;
+  }
   function marcarInicio() {
     emVoo++;
-    var faixa = document.getElementById("faixaCarregando");
-    if (faixa) faixa.hidden = false;
+    var f = faixa();
+    if (f) f.hidden = false;
   }
   function marcarFim() {
     emVoo = Math.max(0, emVoo - 1);
     if (emVoo) return;
-    var faixa = document.getElementById("faixaCarregando");
-    if (faixa) faixa.hidden = true;
+    var f = faixa();
+    if (f) f.hidden = true;
   }
 
+  // Traz hisowerRows + operadores + separacao + prioridade + entregaOrdem
+  // numa requisição só (função get_tudo no banco).
   // mostrarFaixa: só quando o carregamento é pedido pelo usuário (botão
-  // "Atualizar") ou é o primeiro ao abrir a página. A atualização automática
-  // de 15-30s roda sem faixa — senão ela ficaria piscando o tempo todo — e
-  // aceita o memo; a pedida pelo usuário ignora o memo (mas junta com uma
-  // busca que já esteja em voo).
+  // "Atualizar") ou é o primeiro ao abrir a página — aí também ignora o memo
+  // (mas ainda junta com uma busca que já esteja em voo). A atualização
+  // automática de 30s roda sem faixa e aceita o memo.
   function getTudo(mostrarFaixa) {
-    if (!temConfig()) return Promise.reject(new Error("Web App não configurado."));
+    if (!temConfig()) return Promise.reject(new Error("Banco não configurado."));
     if (mostrarFaixa) marcarInicio();
     function terminar() { if (mostrarFaixa) marcarFim(); }
-    // JSON.parse a cada chamada: cada tela recebe seus próprios objetos.
-    return buscarTudoTexto(!!mostrarFaixa).then(function (txt) {
+    // JSON.parse aqui, em cada tela: cada uma recebe seus próprios objetos
+    // (nada compartilhado entre iframes que uma tela possa alterar na outra).
+    return nucleo().buscarTudoTexto(!!mostrarFaixa).then(function (txt) {
       terminar();
       return JSON.parse(txt);
     }, function (e) {
@@ -1636,36 +1691,77 @@ window.EXP_SHEETS_CONFIG = {
     });
   }
 
-  // IMPORTANTE (CORS): manda o POST com Content-Type text/plain — se fosse
-  // application/json o navegador dispararia um preflight OPTIONS, que o Apps
-  // Script Web App não responde corretamente, e a chamada falharia por CORS.
-  function post(body) {
-    return registrarEscrita(fetchComTimeout(CONFIG.webAppUrl, {
-      method: "POST",
-      headers: { "Content-Type": "text/plain;charset=utf-8" },
-      body: JSON.stringify(body)
-    }).then(function (res) {
-      if (!res.ok) throw new Error("Planilha HTTP " + res.status);
-      return res.json();
-    }));
+  function escreverDoc(colecao, id, dados, merge) {
+    if (colecao === "estado" && id === "hisowerRows") {
+      if (!merge) {
+        return rpc("substituir_hisower", {
+          p_rows: dados.rows || [],
+          p_captured_at: dados.capturedAt || null,
+          p_erro: dados.erroCaptura === undefined ? null : dados.erroCaptura
+        });
+      }
+      // Merge = só horário e/ou erro da captura, sem mexer nas linhas.
+      var patch = {};
+      if (Object.prototype.hasOwnProperty.call(dados, "capturedAt")) patch.capturedAt = dados.capturedAt;
+      if (Object.prototype.hasOwnProperty.call(dados, "erroCaptura")) patch.erroCaptura = dados.erroCaptura;
+      return rpc("set_estado", { p_id: "hisowerMeta", p_dados: patch, p_merge: true });
+    }
+    if (colecao === "estado") {
+      return rpc("set_estado", { p_id: id, p_dados: dados, p_merge: !!merge });
+    }
+    if (colecao === "separacao") {
+      // Upsert: com merge, só as colunas enviadas mudam (as outras ficam como
+      // estavam); sem merge, as ausentes viram vazio.
+      var linha = { id: String(id) };
+      Object.keys(COLUNAS_SEPARACAO).forEach(function (campo) {
+        if (Object.prototype.hasOwnProperty.call(dados, campo)) linha[COLUNAS_SEPARACAO[campo]] = dados[campo];
+        else if (!merge) linha[COLUNAS_SEPARACAO[campo]] = null;
+      });
+      return chamar("POST", "/rest/v1/separacao?on_conflict=id", linha,
+        { Prefer: "resolution=merge-duplicates,return=minimal" });
+    }
+    return Promise.resolve("");
   }
 
   function setDoc(colecao, id, objetoPlano, opts) {
-    if (!temConfig()) return Promise.reject(new Error("Web App não configurado."));
-    return post({ action: "setDoc", colecao: colecao, id: id, dados: objetoPlano, opts: opts || {} });
+    if (!temConfig()) return Promise.reject(new Error("Banco não configurado."));
+    var p = escreverDoc(colecao, id, objetoPlano || {}, !!(opts && opts.merge)).then(function () { return { ok: true }; });
+    return nucleo().registrarEscrita(p);
   }
 
+  // Apagar algo que não existe não é erro — mesmo contrato idempotente de antes.
   function deleteDoc(colecao, id) {
-    if (!temConfig()) return Promise.reject(new Error("Web App não configurado."));
-    return post({ action: "deleteDoc", colecao: colecao, id: id });
+    if (!temConfig()) return Promise.reject(new Error("Banco não configurado."));
+    var tabela = colecao === "separacao" ? "separacao" : colecao === "estado" ? "estado" : null;
+    var p = tabela
+      ? chamar("DELETE", "/rest/v1/" + tabela + "?id=" + eq(id), undefined, { Prefer: "return=minimal" })
+      : Promise.resolve("");
+    return nucleo().registrarEscrita(p.then(function () { return { ok: true }; }));
   }
 
+  // Sanitiza a "chave" de carga (contém "/" de datas BR) — continua sendo o
+  // "id" (chave primária) da tabela separacao, igual era na planilha.
   function chaveParaDocId(chave) {
     return String(chave || "").replace(/\//g, "-");
   }
 
-  window.Exp = window.Exp || {};
-  window.Exp.Db = {
+  // Chaves do chrome.storage.local que só a captura do background.js mexe
+  // (a cada 1 min). Com o banco configurado as telas leem do banco, não
+  // delas — então uma mudança SÓ nessas chaves não é motivo pra tela buscar
+  // tudo de novo. Sem banco (modo demo local) elas são a fonte dos dados, e
+  // aí toda mudança conta.
+  var CHAVES_SO_CAPTURA = {
+    hisowerRows: true, capturedAt: true, erroCaptura: true,
+    ultimoEnvioCaptura: true, versaoNotificada: true, abasParaRecarregar: true
+  };
+  function soMudouCaptura(mudancas) {
+    if (!temConfig()) return false;
+    var chaves = Object.keys(mudancas || {});
+    return chaves.length > 0 && chaves.every(function (k) { return CHAVES_SO_CAPTURA[k]; });
+  }
+
+  self.Exp = self.Exp || {};
+  self.Exp.Db = {
     temConfig: temConfig,
     getDoc: getDoc,
     getTudo: getTudo,
@@ -1673,7 +1769,9 @@ window.EXP_SHEETS_CONFIG = {
     setDoc: setDoc,
     deleteDoc: deleteDoc,
     listCollection: listCollection,
-    chaveParaDocId: chaveParaDocId
+    chaveParaDocId: chaveParaDocId,
+    soMudouCaptura: soMudouCaptura,
+    _nucleo: nucleoProprio
   };
 })();
 </script>
@@ -4099,7 +4197,7 @@ window.EXP_SHEETS_CONFIG = {
       });
     } else {
       aplicar(E.Db.cacheOuDemo());
-      mostrarBanner("Modo demo local — configure o Firebase para dados reais.", false);
+      mostrarBanner("Modo demo local — configure o Supabase para dados reais.", false);
       if (cb) cb();
     }
   }
