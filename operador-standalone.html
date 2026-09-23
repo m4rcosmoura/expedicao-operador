@@ -749,6 +749,27 @@ tbody tr.linha-pendencia td:first-child { box-shadow: inset 3px 0 0 #b26a00; }
         <div id="vazioAtribuidas" class="vazio" hidden>Nenhuma carga atribuída ainda.</div>
       </div>
     </section>
+
+    <section class="bloco">
+      <h2 id="tituloEmSeparacao">Em separação</h2>
+      <div class="tabela-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Carga Web</th>
+              <th>Placa</th>
+              <th>Empresa</th>
+              <th>Operador</th>
+              <th>Início</th>
+              <th class="num">Tempo</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody id="corpoEmSeparacao"></tbody>
+        </table>
+        <div id="vazioEmSeparacao" class="vazio" hidden>Nenhuma carga em separação agora.</div>
+      </div>
+    </section>
   </main>
 </section>
 
@@ -2548,6 +2569,9 @@ window.EXP_SUPABASE_CONFIG = {
   var vazioAtribuidas = document.getElementById("vazioAtribuidas");
   var tituloPendentes = document.getElementById("tituloPendentes");
   var tituloAtribuidas = document.getElementById("tituloAtribuidas");
+  var corpoEmSeparacao = document.getElementById("corpoEmSeparacao");
+  var vazioEmSeparacao = document.getElementById("vazioEmSeparacao");
+  var tituloEmSeparacao = document.getElementById("tituloEmSeparacao");
   var formAntecipado = document.getElementById("formAntecipado");
   var inputPlacaAntecipada = document.getElementById("inputPlacaAntecipada");
   var selOperadorAntecipado = document.getElementById("selOperadorAntecipado");
@@ -3127,6 +3151,20 @@ window.EXP_SUPABASE_CONFIG = {
     persistirSeparacaoCarga(c.chave, { fimEm: d.toISOString() });
   }
 
+  // Corrige o início de uma separação que já está em andamento (operador
+  // bateu "Iniciar" atrasado, ou o início retroativo foi lançado errado).
+  function editarInicioRetroativo(c) {
+    var entrada = window.prompt(
+      "Corrigir a data/hora em que a separação da placa " + c.placa + " começou (DD/MM/AAAA HH:MM):",
+      fmtDataHora(c._flags.sepInicioTs)
+    );
+    if (entrada == null) return;
+    var d = parseRetroativo(entrada);
+    if (!d) { window.alert('Data/hora inválida. Use o formato DD/MM/AAAA HH:MM (ex: "24/08/2026 14:30").'); return; }
+    if (d > new Date() && !window.confirm("O início informado está no futuro. Gravar mesmo assim?")) return;
+    persistirSeparacaoCarga(c.chave, { inicioEm: d.toISOString() });
+  }
+
   function selecionarOperador(chave, onEscolher) {
     var sel = document.createElement("select");
     sel.className = "sel-operador";
@@ -3182,19 +3220,32 @@ window.EXP_SUPABASE_CONFIG = {
     });
 
     var pendentes = cargas.filter(function (c) { return !c.operador; });
-    var atribuidas = cargas.filter(function (c) { return !!c.operador; });
+    // Já iniciadas (inclusive separação antecipada em andamento) saem daqui e
+    // vão pra tabela "Em separação" abaixo.
+    var atribuidas = cargas.filter(function (c) { return !!c.operador && !c._flags.sepInicioTs; });
 
-    // Resumo por turno conta também as cargas já "Em separação": o operador
+    // Separação começou e ainda não terminou — "Em separação" normal ou
+    // antecipada já iniciada. É onde o admin corrige o início e finaliza
+    // (retroativo). Mais antiga primeiro.
+    var emSeparacao = todas.filter(function (c) {
+      return (c._c.status === E.STATUS.EM_SEPARACAO || c._c.status === E.STATUS.SEPARACAO_ANTECIPADA) &&
+        !!c.operador && !!c._flags.sepInicioTs && !c._flags.sepFimTs;
+    }).filter(bateBusca).filter(bateEmpresa).sort(function (a, b) {
+      return a._flags.sepInicioTs.getTime() - b._flags.sepInicioTs.getTime();
+    });
+
+    // Resumo por turno conta também as cargas já em separação: o operador
     // já está trabalhando nelas, então ainda contam como carga atribuída a
     // ele — sem isso, o total do turno caía assim que ele clicava em Iniciar.
-    var emSeparacao = todas.filter(function (c) {
-      return c._c.status === E.STATUS.EM_SEPARACAO && !!c.operador;
-    }).filter(bateBusca).filter(bateEmpresa);
-
     renderResumoOperador(atribuidas.concat(emSeparacao));
 
     tituloPendentes.textContent = "Aguardando atribuição (" + pendentes.length + ")";
     tituloAtribuidas.textContent = "Já atribuídas (" + atribuidas.length + ")";
+    tituloEmSeparacao.textContent = "Em separação (" + emSeparacao.length + ")";
+
+    corpoEmSeparacao.innerHTML = "";
+    vazioEmSeparacao.hidden = emSeparacao.length > 0;
+    emSeparacao.forEach(function (c) { corpoEmSeparacao.appendChild(linhaEmSeparacao(c, agora)); });
 
     corpoPendentes.innerHTML = "";
     vazioPendentes.hidden = pendentes.length > 0;
@@ -3293,31 +3344,48 @@ window.EXP_SUPABASE_CONFIG = {
     btn.addEventListener("click", function () { desvincular(c.chave); });
     tdAcao.appendChild(btn);
 
-    // Retroativo: mostra só a ação que falta (início ainda não bateu, ou já
-    // começou mas ainda não terminou) — reflete o mesmo botão único que o
-    // operador veria no celular dele, só que aqui é o admin escolhendo a
-    // data/hora em vez de usar "agora".
-    if (!c._flags.sepInicioTs) {
-      var btnIniciarRetro = document.createElement("button");
-      btnIniciarRetro.type = "button";
-      btnIniciarRetro.className = "btn-editar";
-      btnIniciarRetro.style.marginLeft = "8px";
-      btnIniciarRetro.textContent = "Iniciar (retroativo)";
-      btnIniciarRetro.title = "Registrar o início da separação com uma data/hora escolhida, em vez de agora";
-      btnIniciarRetro.addEventListener("click", function () { iniciarRetroativo(c); });
-      tdAcao.appendChild(btnIniciarRetro);
-    } else if (!c._flags.sepFimTs) {
-      var btnFinalizarRetro = document.createElement("button");
-      btnFinalizarRetro.type = "button";
-      btnFinalizarRetro.className = "btn-editar";
-      btnFinalizarRetro.style.marginLeft = "8px";
-      btnFinalizarRetro.textContent = "Concluir (retroativo)";
-      btnFinalizarRetro.title = "Registrar o término da separação com uma data/hora escolhida, em vez de agora";
-      btnFinalizarRetro.addEventListener("click", function () { finalizarRetroativo(c); });
-      tdAcao.appendChild(btnFinalizarRetro);
-    }
+    // Retroativo: aqui só existe o início (carga iniciada vai pra tabela "Em
+    // separação", onde ficam as ações de corrigir início e finalizar).
+    var btnIniciarRetro = document.createElement("button");
+    btnIniciarRetro.type = "button";
+    btnIniciarRetro.className = "btn-editar";
+    btnIniciarRetro.style.marginLeft = "8px";
+    btnIniciarRetro.textContent = "Iniciar (retroativo)";
+    btnIniciarRetro.title = "Registrar o início da separação com uma data/hora escolhida, em vez de agora";
+    btnIniciarRetro.addEventListener("click", function () { iniciarRetroativo(c); });
+    tdAcao.appendChild(btnIniciarRetro);
 
     if (E.ehChavePendente(c.chave)) tdAcao.appendChild(botoesAntecipado(c.chave));
+
+    tr.appendChild(tdAcao);
+    return tr;
+  }
+
+  function linhaEmSeparacao(c, agora) {
+    var tr = linhaBase(c);
+    tr.appendChild(td('<span class="placa">' + esc(c.operador) + "</span>"));
+    tr.appendChild(td(esc(fmtDataHora(c._flags.sepInicioTs))));
+    var tdTempo = td(esc(E.fmtDur(agora - c._flags.sepInicioTs.getTime())));
+    tdTempo.className = "num";
+    tr.appendChild(tdTempo);
+
+    var tdAcao = document.createElement("td");
+    var btnEditarInicio = document.createElement("button");
+    btnEditarInicio.type = "button";
+    btnEditarInicio.className = "btn-editar";
+    btnEditarInicio.textContent = "Editar início";
+    btnEditarInicio.title = "Corrigir a data/hora em que a separação começou";
+    btnEditarInicio.addEventListener("click", function () { editarInicioRetroativo(c); });
+    tdAcao.appendChild(btnEditarInicio);
+
+    var btnFinalizar = document.createElement("button");
+    btnFinalizar.type = "button";
+    btnFinalizar.className = "btn-salvar";
+    btnFinalizar.style.marginLeft = "8px";
+    btnFinalizar.textContent = "Finalizar (retroativo)";
+    btnFinalizar.title = "Registrar o término da separação com uma data/hora escolhida (sugere agora)";
+    btnFinalizar.addEventListener("click", function () { finalizarRetroativo(c); });
+    tdAcao.appendChild(btnFinalizar);
 
     tr.appendChild(tdAcao);
     return tr;
