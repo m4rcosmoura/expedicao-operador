@@ -1488,13 +1488,79 @@ window.EXP_SHEETS_CONFIG = {
     });
   }
 
-  function getDoc(colecao, id) {
-    if (!temConfig()) return Promise.reject(new Error("Web App não configurado."));
+  // Busca compartilhada do getTudo — ver o mesmo trecho em
+  // extension/firestore-client.js pra explicação completa. Aqui: pedidos
+  // simultâneos (aba do admin + badge + getDoc de prioridade) viram uma
+  // requisição só, e uma resposta de menos de MEMO_MS é reaproveitada. Leitura
+  // pedida com gravação em voo espera a gravação terminar e nunca reaproveita
+  // resposta de antes dela (ver "geracao").
+  var MEMO_MS = 10000;
+  var memoTexto = null, memoEm = 0;
+  var buscaEmVoo = null; // { gen, promise }
+  var escritasEmVoo = [];
+  var geracao = 0;
+
+  function buscarTudoTexto(ignorarMemo) {
+    if (buscaEmVoo && buscaEmVoo.gen === geracao) return buscaEmVoo.promise;
+    if (!ignorarMemo && memoTexto && Date.now() - memoEm < MEMO_MS) return Promise.resolve(memoTexto);
+
+    var gen = geracao;
+    var espera = escritasEmVoo.length
+      ? Promise.all(escritasEmVoo.map(function (p) { return p.catch(function () { /* só esperar */ }); }))
+      : Promise.resolve();
+    var promise = espera.then(function () {
+      return fetchComTimeout(CONFIG.webAppUrl + "?action=getTudo");
+    }).then(function (res) {
+      if (!res.ok) throw new Error("Planilha getTudo HTTP " + res.status);
+      return res.text();
+    }).then(function (txt) {
+      // O Google às vezes responde 200 com uma página HTML de erro.
+      if (String(txt).trim().charAt(0) !== "{") throw new Error("Resposta inválida da planilha.");
+      if (gen === geracao) { memoTexto = txt; memoEm = Date.now(); }
+      gravarCache(txt);
+      return txt;
+    });
+    var registro = { gen: gen, promise: promise };
+    buscaEmVoo = registro;
+    function limpar() { if (buscaEmVoo === registro) buscaEmVoo = null; }
+    promise.then(limpar, limpar);
+    return promise;
+  }
+
+  function registrarEscrita(p) {
+    geracao++;
+    memoTexto = null;
+    escritasEmVoo.push(p);
+    function tirar() {
+      var i = escritasEmVoo.indexOf(p);
+      if (i > -1) escritasEmVoo.splice(i, 1);
+    }
+    p.then(tirar, tirar);
+    return p;
+  }
+
+  // Documentos que já vêm dentro do getTudo (Code.gs novo) — getDoc deles
+  // reaproveita a mesma busca. Com o Code.gs antigo, cai no getDoc de rede.
+  var IDS_DO_TUDO = { prioridade: true, entregaOrdem: true };
+
+  function getDocRede(colecao, id) {
     var url = CONFIG.webAppUrl + "?action=getDoc&colecao=" + encodeURIComponent(colecao) + "&id=" + encodeURIComponent(id);
     return fetchComTimeout(url).then(function (res) {
       if (!res.ok) throw new Error("Planilha getDoc HTTP " + res.status);
       return res.json();
     });
+  }
+
+  function getDoc(colecao, id) {
+    if (!temConfig()) return Promise.reject(new Error("Web App não configurado."));
+    if (colecao === "estado" && IDS_DO_TUDO[id]) {
+      return buscarTudoTexto(false).then(function (txt) {
+        var t = JSON.parse(txt);
+        if (Object.prototype.hasOwnProperty.call(t, id)) return t[id];
+        return getDocRede(colecao, id);
+      });
+    }
+    return getDocRede(colecao, id);
   }
 
   function listCollection(colecao) {
@@ -1515,8 +1581,10 @@ window.EXP_SHEETS_CONFIG = {
   // a página ficava totalmente em branco até a resposta chegar.
   var CACHE_KEY = "exp_cache";
 
-  function gravarCache(t) {
-    try { localStorage.setItem(CACHE_KEY, JSON.stringify(t)); } catch (e) { /* cota cheia: segue sem cache */ }
+  // Recebe o texto JSON já pronto da resposta (mesmo conteúdo que antes era
+  // re-serializado aqui).
+  function gravarCache(txt) {
+    try { localStorage.setItem(CACHE_KEY, txt); } catch (e) { /* cota cheia: segue sem cache */ }
   }
 
   // Último dado bom; se nunca houve, cai no modo demo local.
@@ -1551,18 +1619,17 @@ window.EXP_SHEETS_CONFIG = {
 
   // mostrarFaixa: só quando o carregamento é pedido pelo usuário (botão
   // "Atualizar") ou é o primeiro ao abrir a página. A atualização automática
-  // de 15-30s roda sem faixa — senão ela ficaria piscando o tempo todo.
+  // de 15-30s roda sem faixa — senão ela ficaria piscando o tempo todo — e
+  // aceita o memo; a pedida pelo usuário ignora o memo (mas junta com uma
+  // busca que já esteja em voo).
   function getTudo(mostrarFaixa) {
     if (!temConfig()) return Promise.reject(new Error("Web App não configurado."));
     if (mostrarFaixa) marcarInicio();
     function terminar() { if (mostrarFaixa) marcarFim(); }
-    return fetchComTimeout(CONFIG.webAppUrl + "?action=getTudo").then(function (res) {
-      if (!res.ok) throw new Error("Planilha getTudo HTTP " + res.status);
-      return res.json();
-    }).then(function (json) {
-      gravarCache(json);
+    // JSON.parse a cada chamada: cada tela recebe seus próprios objetos.
+    return buscarTudoTexto(!!mostrarFaixa).then(function (txt) {
       terminar();
-      return json;
+      return JSON.parse(txt);
     }, function (e) {
       terminar();
       throw e;
@@ -1573,14 +1640,14 @@ window.EXP_SHEETS_CONFIG = {
   // application/json o navegador dispararia um preflight OPTIONS, que o Apps
   // Script Web App não responde corretamente, e a chamada falharia por CORS.
   function post(body) {
-    return fetchComTimeout(CONFIG.webAppUrl, {
+    return registrarEscrita(fetchComTimeout(CONFIG.webAppUrl, {
       method: "POST",
       headers: { "Content-Type": "text/plain;charset=utf-8" },
       body: JSON.stringify(body)
     }).then(function (res) {
       if (!res.ok) throw new Error("Planilha HTTP " + res.status);
       return res.json();
-    });
+    }));
   }
 
   function setDoc(colecao, id, objetoPlano, opts) {
@@ -2063,7 +2130,12 @@ window.EXP_SHEETS_CONFIG = {
     var mapa = {};
     ((t && t.separacao) || []).forEach(function (doc) { if (doc.chaveOriginal) mapa[doc.chaveOriginal] = doc; });
     estado.separacao = mapa;
-    if (docPrioridade !== undefined) estado.prioridade = (docPrioridade && docPrioridade.mapa) || {};
+    // Gravação de prioridade ainda em voo: o banco ainda responde o mapa
+    // antigo, e aceitá-lo aqui desfaria a reordenação recém-feita — era isso
+    // que fazia a linha "voltar pro lugar" depois de soltar (ver gravacoesEmVoo).
+    if (docPrioridade !== undefined && gravacoesEmVoo === 0) {
+      estado.prioridade = (docPrioridade && docPrioridade.mapa) || {};
+    }
     render();
   }
 
@@ -2084,13 +2156,25 @@ window.EXP_SHEETS_CONFIG = {
     }
   }
 
+  // Reordenação gravada mas ainda não confirmada pelo banco — ver aplicar().
+  var gravacoesEmVoo = 0;
+
   // Grava o mapa {chave: numero} inteiro — reordenar move mais de uma carga
   // por vez, então persiste sempre a lista toda (não por patch).
-  function persistirMapa(mapa) {
+  function persistirMapa(mapa, manual) {
     estado.prioridade = mapa;
     if (usaFirestore()) {
+      gravacoesEmVoo++;
       E.Db.setDoc("estado", "prioridade", { mapa: mapa }).catch(function (e) {
         console.warn("Falha ao gravar prioridade:", e);
+        // Só avisa quando foi o usuário que reordenou: a renumeração
+        // automática do render() também passa por aqui e não deve incomodar.
+        if (manual) {
+          window.alert("Não deu pra salvar a nova ordem agora — sem conexão com o banco. " +
+            "A lista vai voltar para a ordem anterior; tente de novo em instantes.");
+        }
+      }).then(function () {
+        gravacoesEmVoo = Math.max(0, gravacoesEmVoo - 1);
       });
     } else {
       try {
@@ -2207,7 +2291,7 @@ window.EXP_SHEETS_CONFIG = {
 
     var novoMapa = {};
     chaves.forEach(function (ch, i) { novoMapa[ch] = i + 1; });
-    persistirMapa(novoMapa);
+    persistirMapa(novoMapa, true);
     render();
   }
 
@@ -2484,10 +2568,35 @@ window.EXP_SHEETS_CONFIG = {
     return resto ? letras + "-" + resto : letras;
   }
 
+  // Linha REAL (com "Entrou na Portaria" preenchido) mais antiga do Hisower
+  // pra essa placa, ou null. Usado em qualquer lugar que for gravar uma
+  // separação antecipada ("PEND:placa") pra checar antes se a carga já não
+  // está rastreada normalmente sob a chave real — criar um "PEND:" por cima
+  // dela duplicaria a carga (fantasma paralelo, o mesmo tipo de registro
+  // órfão que já causou cargas de 20+ dias aparecendo à toa).
+  function linhaRealDaPlaca(placa) {
+    var linhas = estado.rows.filter(function (r) {
+      return E.isFilled(r.entrouPortaria) && String(r.placa || "").trim().toUpperCase() === placa;
+    }).sort(function (a, b) {
+      var ta = E.parseBR(a.entrouPortaria), tb = E.parseBR(b.entrouPortaria);
+      return (ta ? ta.getTime() : 0) - (tb ? tb.getTime() : 0);
+    });
+    return linhas.length ? linhas[0] : null;
+  }
+
   function adiantarSeparacao(placa, operador) {
     placa = mascararPlaca(placa);
     avisoAntecipado.hidden = true;
     if (!placa || !operador) return;
+
+    var linhaReal = linhaRealDaPlaca(placa);
+    if (linhaReal) {
+      avisoAntecipado.hidden = false;
+      avisoAntecipado.textContent = 'A placa "' + placa + '" já tem uma carga real no Hisower (entrou na portaria em ' +
+        linhaReal.entrouPortaria + '). Não é preciso adiantar — o operador foi atribuído direto nela.';
+      atribuir(E.chaveDe(linhaReal.placa, linhaReal.entrouPortaria), operador);
+      return;
+    }
 
     var existeLinha = estado.rows.some(function (r) {
       return !E.isFilled(r.entrouPortaria) && String(r.placa || "").trim().toUpperCase() === placa;
@@ -2816,7 +2925,9 @@ window.EXP_SHEETS_CONFIG = {
 
   // Corrige a placa de um lançamento antecipado (ex: erro de digitação),
   // migrando os dados (operador, horários já registrados) da chave antiga
-  // "PEND:placaErrada" pra "PEND:placaCerta".
+  // "PEND:placaErrada" pra "PEND:placaCerta" — ou, se a placa corrigida já
+  // tiver uma linha real no Hisower, direto pra chave real (mesmo motivo de
+  // linhaRealDaPlaca: não duplicar a carga com um "PEND:" por cima dela).
   function editarPlacaAntecipada(chave) {
     var placaAtual = E.placaDaChave(chave);
     var entrada = window.prompt("Corrigir placa do lançamento antecipado:", placaAtual);
@@ -2824,9 +2935,12 @@ window.EXP_SHEETS_CONFIG = {
     var novaPlaca = mascararPlaca(entrada);
     if (!novaPlaca || novaPlaca === placaAtual) return;
 
-    var novaChave = E.chavePendente(novaPlaca);
+    var linhaReal = linhaRealDaPlaca(novaPlaca);
+    var novaChave = linhaReal ? E.chaveDe(linhaReal.placa, linhaReal.entrouPortaria) : E.chavePendente(novaPlaca);
     if (estado.separacao[novaChave]) {
-      window.alert('Já existe um lançamento antecipado para a placa "' + novaPlaca + '".');
+      window.alert(linhaReal
+        ? 'A placa "' + novaPlaca + '" já tem uma carga real no Hisower, e ela já tem uma separação registrada — resolva por lá.'
+        : 'Já existe um lançamento antecipado para a placa "' + novaPlaca + '".');
       return;
     }
 
@@ -2838,6 +2952,11 @@ window.EXP_SHEETS_CONFIG = {
     if (usaFirestore()) {
       E.Db.setDoc("separacao", E.Db.chaveParaDocId(novaChave), dadosParaFirestore(novaChave, novo[novaChave]), { merge: true })
         .catch(function (e) { console.warn("Falha ao gravar novo lançamento antecipado:", e); });
+    }
+
+    if (linhaReal) {
+      window.alert('A placa "' + novaPlaca + '" já tem uma carga real no Hisower (entrou na portaria em ' +
+        linhaReal.entrouPortaria + '). O lançamento foi movido direto pra ela, sem criar um novo antecipado.');
     }
   }
 
@@ -2865,6 +2984,49 @@ window.EXP_SHEETS_CONFIG = {
     wrap.appendChild(btnExcluir);
 
     return wrap;
+  }
+
+  // ---- Início/fim de separação retroativo (só admin — esta view só existe
+  // dentro de viewAdmin/AdminViews, logado como admin) ----
+  //
+  // O fluxo normal é o operador bater "Iniciar"/"Concluir separação" no
+  // celular dele, na hora. Mas às vezes a separação já aconteceu de verdade
+  // (o caminhão já foi carregado) e ninguém registrou isso no app — o admin
+  // precisa poder lançar esses dois horários manualmente, com a data/hora
+  // real de quando aconteceu (não "agora"), pra carga não ficar presa em
+  // "Aguardando Separação"/"Em separação" indefinidamente nem distorcer o
+  // tempo médio no Desempenho.
+  function parseRetroativo(texto) {
+    var d = E.parseBR(texto);
+    return d && !isNaN(d.getTime()) ? d : null;
+  }
+
+  function iniciarRetroativo(c) {
+    var entrada = window.prompt(
+      "Data/hora em que a separação da placa " + c.placa + " REALMENTE começou (DD/MM/AAAA HH:MM):",
+      fmtDataHora(new Date())
+    );
+    if (entrada == null) return;
+    var d = parseRetroativo(entrada);
+    if (!d) { window.alert('Data/hora inválida. Use o formato DD/MM/AAAA HH:MM (ex: "24/08/2026 14:30").'); return; }
+    persistirSeparacaoCarga(c.chave, { inicioEm: d.toISOString() });
+  }
+
+  function finalizarRetroativo(c) {
+    var sep = estado.separacao[c.chave];
+    var entrada = window.prompt(
+      "Data/hora em que a separação da placa " + c.placa + " REALMENTE terminou (DD/MM/AAAA HH:MM):",
+      fmtDataHora(new Date())
+    );
+    if (entrada == null) return;
+    var d = parseRetroativo(entrada);
+    if (!d) { window.alert('Data/hora inválida. Use o formato DD/MM/AAAA HH:MM (ex: "24/08/2026 14:30").'); return; }
+    if (sep && sep.inicioEm && d < new Date(sep.inicioEm)) {
+      if (!window.confirm(
+        "O término informado é ANTES do início registrado (" + fmtDataHora(new Date(sep.inicioEm)) + "). Gravar mesmo assim?"
+      )) return;
+    }
+    persistirSeparacaoCarga(c.chave, { fimEm: d.toISOString() });
   }
 
   function selecionarOperador(chave, onEscolher) {
@@ -3032,6 +3194,30 @@ window.EXP_SHEETS_CONFIG = {
     btn.style.marginLeft = "8px";
     btn.addEventListener("click", function () { desvincular(c.chave); });
     tdAcao.appendChild(btn);
+
+    // Retroativo: mostra só a ação que falta (início ainda não bateu, ou já
+    // começou mas ainda não terminou) — reflete o mesmo botão único que o
+    // operador veria no celular dele, só que aqui é o admin escolhendo a
+    // data/hora em vez de usar "agora".
+    if (!c._flags.sepInicioTs) {
+      var btnIniciarRetro = document.createElement("button");
+      btnIniciarRetro.type = "button";
+      btnIniciarRetro.className = "btn-editar";
+      btnIniciarRetro.style.marginLeft = "8px";
+      btnIniciarRetro.textContent = "Iniciar (retroativo)";
+      btnIniciarRetro.title = "Registrar o início da separação com uma data/hora escolhida, em vez de agora";
+      btnIniciarRetro.addEventListener("click", function () { iniciarRetroativo(c); });
+      tdAcao.appendChild(btnIniciarRetro);
+    } else if (!c._flags.sepFimTs) {
+      var btnFinalizarRetro = document.createElement("button");
+      btnFinalizarRetro.type = "button";
+      btnFinalizarRetro.className = "btn-editar";
+      btnFinalizarRetro.style.marginLeft = "8px";
+      btnFinalizarRetro.textContent = "Concluir (retroativo)";
+      btnFinalizarRetro.title = "Registrar o término da separação com uma data/hora escolhida, em vez de agora";
+      btnFinalizarRetro.addEventListener("click", function () { finalizarRetroativo(c); });
+      tdAcao.appendChild(btnFinalizarRetro);
+    }
 
     if (E.ehChavePendente(c.chave)) tdAcao.appendChild(botoesAntecipado(c.chave));
 
